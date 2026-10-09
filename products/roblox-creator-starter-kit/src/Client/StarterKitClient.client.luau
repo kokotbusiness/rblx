@@ -146,6 +146,8 @@ spinButton.Position = UDim2.fromScale(0.5, 0.5)
 local spinning = false
 
 local function renderSpin()
+	-- the reused Spin! button lives inside the old ring: take it out before the ring is destroyed
+	spinButton.Parent = nil
 	clear(spinContent)
 	spinTiles = {}
 	local ring = C.create("Frame", {

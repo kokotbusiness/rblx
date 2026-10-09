@@ -24,6 +24,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local DataStoreService = game:GetService("DataStoreService")
 local MarketplaceService = game:GetService("MarketplaceService")
+local RunService = game:GetService("RunService")
 
 local Kit = ReplicatedStorage:WaitForChild("StarterKit")
 local Shared = Kit:WaitForChild("Shared")
@@ -84,6 +85,12 @@ local function loadProfile(player: Player): any
 		local ok, result = withRetries(function()
 			return store:GetAsync(key(player))
 		end)
+		if not ok and RunService:IsStudio() and string.find(tostring(result), "StudioAccessToApisNotAllowed", 1, true) then
+			-- Studio without "Enable Studio Access to API Services": play with unsaved data instead of kicking.
+			warn("[StarterKit] Studio has no API access - data will NOT be saved this session (Game Settings > Security to enable)")
+			store = nil
+			ok, result = true, nil
+		end
 		if not ok then
 			warn("[StarterKit] Load failed for", player.Name, result)
 			player:Kick("Could not load your data. Please rejoin.")

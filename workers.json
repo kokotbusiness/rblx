@@ -1,0 +1,29 @@
+{
+  "note": "Locked until 250 CZK owner-verified net revenue. Max 2 workers. Owner must enable each. Workers are read-only, one bounded run at a time, never recursive.",
+  "workers": {
+    "product-improvement": {
+      "assignment": "Review the Roblox Creator Starter Kit source, docs and any buyer feedback in missions/inputs/ and propose the single most valuable improvement for v1.1, with a concrete patch plan (files, functions, tests). Do not implement it.",
+      "allowed_tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ],
+      "timeout_seconds": 900,
+      "max_runs": 3
+    },
+    "market-research-distribution": {
+      "assignment": "Using only public web sources, list up to 10 places where Roblox developers legitimately discuss or buy scripting kits, with each venue's self-promotion rule quoted and linked, and draft one rule-compliant post per venue. Never post anything.",
+      "allowed_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "timeout_seconds": 900,
+      "max_runs": 3
+    }
+  },
+  "enabled": [],
+  "runs": {}
+}

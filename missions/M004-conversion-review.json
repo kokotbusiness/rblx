@@ -1,0 +1,31 @@
+{
+  "id": "M004",
+  "title": "Conversion review and listing fix (read-only agent + owner)",
+  "kind": "mission",
+  "executor": "agent",
+  "goal": "Find the biggest reason visitors do not buy and fix the listing.",
+  "measurable_target": "1 concrete listing change shipped; view-to-purchase rate measured before and after over 7 days each.",
+  "deliverable": "worker-output/M004-*.md report + the owner's applied change noted in evidence.",
+  "acceptance_criteria": [
+    "Owner pasted real analytics/feedback into missions/inputs/M004.md before running the agent",
+    "Agent report lists at most 3 changes, each tied to the provided evidence",
+    "Owner applied at least 1 change and recorded before/after numbers"
+  ],
+  "agent_prompt": "Read missions/inputs/M004.md (real analytics and feedback pasted by the owner), landing-page/index.html, marketing/product-description.md and the product README. Identify at most 3 changes most likely to increase purchases, each justified only by the provided evidence. If the evidence is missing or insufficient, say so and stop.",
+  "allowed_tools": [
+    "Read",
+    "Grep",
+    "Glob"
+  ],
+  "timeout_seconds": 600,
+  "human_steps": [
+    "Paste real numbers/feedback into missions/inputs/M004.md",
+    "Run: python3 s2e.py mission run M004 --execute",
+    "Apply the change you agree with"
+  ],
+  "status": "planned",
+  "started_at": null,
+  "ended_at": null,
+  "outcome": null,
+  "evidence": null
+}

@@ -1,0 +1,90 @@
+{
+  "project": "SURVIVE2EARN",
+  "mission": "Create a real, sellable digital product and reach the first 250 CZK of owner-verified net revenue.",
+  "product": "Roblox Creator Starter Kit (products/roblox-creator-starter-kit)",
+  "status": "MISSION_ACTIVE",
+  "updated_at": "2026-10-09T22:17:30+00:00",
+  "initial_cash_czk": "0.00",
+  "unlock_threshold_czk": "250.00",
+  "verified_net_revenue_czk": "0.00",
+  "gross_sales_czk": "0.00",
+  "refunds_czk": "0.00",
+  "actual_expenses_czk": "0.00",
+  "available_cash_czk": "0.00",
+  "verified_sale_count": 0,
+  "budget_breach": false,
+  "unreconciled_entry_count": 0,
+  "ledger_valid": true,
+  "ledger_problems": [],
+  "mission_file_problems": [],
+  "active_mission": "M000",
+  "next_planned_mission": "M001",
+  "missions_concluded_without_sale": 0,
+  "max_missions_before_sale": 5,
+  "missions": [
+    {
+      "id": "M000",
+      "title": "Bootstrap: build the first product and launch assets",
+      "kind": "bootstrap",
+      "executor": "agent",
+      "status": "active",
+      "measurable_target": "Product zip builds with 0 failing automated checks; landing page, marketing drafts, dashboard and tests exist.",
+      "outcome": null
+    },
+    {
+      "id": "M001",
+      "title": "Verify the kit in Roblox Studio and capture real previews",
+      "kind": "mission",
+      "executor": "human",
+      "status": "planned",
+      "measurable_target": "14/14 steps of docs/STUDIO_TEST_CHECKLIST.md pass; >= 4 real screenshots or 1 short GIF.",
+      "outcome": null
+    },
+    {
+      "id": "M002",
+      "title": "Publish a paid listing (owner action)",
+      "kind": "mission",
+      "executor": "human",
+      "status": "planned",
+      "measurable_target": "1 public listing with a working paid checkout and the zip attached.",
+      "outcome": null
+    },
+    {
+      "id": "M003",
+      "title": "Launch distribution in legitimate channels",
+      "kind": "mission",
+      "executor": "human",
+      "status": "planned",
+      "measurable_target": ">= 3 posts in channels whose rules allow it, and >= 100 listing page views within 14 days (store analytics).",
+      "outcome": null
+    },
+    {
+      "id": "M004",
+      "title": "Conversion review and listing fix (read-only agent + owner)",
+      "kind": "mission",
+      "executor": "agent",
+      "status": "planned",
+      "measurable_target": "1 concrete listing change shipped; view-to-purchase rate measured before and after over 7 days each.",
+      "outcome": null
+    },
+    {
+      "id": "M005",
+      "title": "Free 'Lite' lead magnet linking to the full kit",
+      "kind": "mission",
+      "executor": "human",
+      "status": "planned",
+      "measurable_target": "Lite version published for free; >= 1 owner-verified sale of the full kit within 21 days.",
+      "outcome": null
+    }
+  ],
+  "failed_attempts": [],
+  "agent_spawning_unlocked": false,
+  "permitted_worker_agents": 0,
+  "enabled_workers": [],
+  "external_services": {
+    "payments": "NOT INTEGRATED - owner sells via a store account they create; sales are entered manually",
+    "publishing": "NOT AUTOMATED - owner posts drafts from marketing/ by hand",
+    "roblox_studio": "NOT AVAILABLE in build environment - Studio test is mission M001",
+    "paid_apis": "NONE USED"
+  }
+}

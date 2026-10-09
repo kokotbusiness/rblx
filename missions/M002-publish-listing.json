@@ -1,0 +1,28 @@
+{
+  "id": "M002",
+  "title": "Publish a paid listing (owner action)",
+  "kind": "mission",
+  "executor": "human",
+  "goal": "Make the product buyable by a stranger.",
+  "measurable_target": "1 public listing with a working paid checkout and the zip attached.",
+  "deliverable": "Public listing URL (itch.io recommended: free account, no listing fee) recorded in this mission's evidence.",
+  "acceptance_criteria": [
+    "Listing is public and shows price, description and real screenshots",
+    "Checkout works for a logged-out visitor (open the page in a private window)",
+    "The uploaded file is the zip built by tools/build.py",
+    "Listing text matches marketing/product-description.md and makes no unverified claims",
+    "landing-page/index.html CTA link points to the listing"
+  ],
+  "human_steps": [
+    "Create a free itch.io account yourself (the system never creates accounts).",
+    "Set up payouts in itch.io (PayPal or Stripe) - your decision, your details; never paste them here.",
+    "New project -> Kind: Tools / Assets; upload the zip; price e.g. $14 (see marketing/pricing.md).",
+    "Paste marketing/product-description.md; add screenshots from M001.",
+    "Publish, open in a private window to check the buy button, record the URL as evidence."
+  ],
+  "status": "planned",
+  "started_at": null,
+  "ended_at": null,
+  "outcome": null,
+  "evidence": null
+}

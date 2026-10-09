@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SURVIVE2EARN Dashboard</title>
+<style>
+:root { --bg:#f6f7fb; --card:#fff; --text:#141826; --muted:#5d6475; --line:#e3e6ee;
+  --good:#1f9d5c; --bad:#d23f45; --info:#3f6be0; --warn:#b7791f; --neutral:#6b7280; --bar:#e8ebf3; }
+@media (prefers-color-scheme: dark) { :root { --bg:#0f1220; --card:#181c2e; --text:#eef1f8; --muted:#9aa3ba;
+  --line:#2a3148; --bar:#2a3148; } }
+* { box-sizing:border-box }
+body { margin:0; font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text) }
+main { max-width:1100px; margin:0 auto; padding:24px 16px 48px }
+h1 { font-size:22px; margin:0 } h2 { font-size:16px; margin:0 0 12px }
+header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; margin-bottom:20px }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; margin-bottom:14px }
+.card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px; overflow-x:auto }
+.grid .card { margin:0 }
+.kpi { font-size:28px; font-weight:700; font-variant-numeric:tabular-nums }
+.muted { color:var(--muted); font-size:13px }
+.mono { font-family:ui-monospace,Menlo,monospace }
+.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap }
+.bar { height:10px; background:var(--bar); border-radius:99px; overflow:hidden; margin:8px 0 4px }
+.bar > div { height:100%; background:var(--good); width:0% }
+.badge { display:inline-block; padding:2px 10px; border-radius:99px; font-size:12px; font-weight:600; color:#fff; white-space:nowrap }
+.badge.good { background:var(--good) } .badge.bad { background:var(--bad) } .badge.info { background:var(--info) }
+.badge.warn { background:var(--warn) } .badge.neutral { background:var(--neutral) }
+.alert { border-radius:12px; padding:12px 16px; margin-bottom:14px; border:1px solid var(--bad) }
+table { width:100%; border-collapse:collapse; font-size:14px }
+th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top }
+th { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted) }
+ul { margin:0; padding-left:18px }
+code { font-family:ui-monospace,Menlo,monospace; font-size:13px }
+</style>
+</head>
+<body><main>
+<header>
+  <div><h1>SURVIVE2EARN</h1><div class=muted>Create a real, sellable digital product and reach the first 250 CZK of owner-verified net revenue.</div></div>
+  <span class="badge info" style="font-size:14px;padding:6px 14px">Mission active</span>
+</header>
+
+<div class=grid>
+  <div class=card><div class=muted>Verified net revenue</div>
+    <div class=kpi>0.00 CZK</div>
+    <div class=bar><div></div></div>
+    <div class=muted>0% of 250.00 CZK goal &middot; owner-verified entries only</div></div>
+  <div class=card><div class=muted>Actual expenses</div>
+    <div class=kpi>0.00 CZK</div>
+    <div class=muted>Starting business cash: 0.00 CZK</div></div>
+  <div class=card><div class=muted>Verified sales</div>
+    <div class=kpi>0</div>
+    <div class=muted>Unreconciled (not counted): 0</div></div>
+  <div class=card><div class=muted>Agent spawning</div>
+    <div class=kpi>Locked</div>
+    <div class=muted>Unlocks at 250 CZK verified net revenue.
+    Enabled: none</div></div>
+</div>
+<div class=grid>
+  <div class=card><div class=muted>Mission progress</div>
+    <div class=kpi>0 / 5</div>
+    <div class=muted>missions concluded without a sale (5 = DORMANT)</div></div>
+  <div class=card><div class=muted>Active mission</div>
+    <div class=kpi>M000</div>
+    <div class=muted>Next planned: M001</div></div>
+  <div class=card><div class=muted>Ledger integrity</div>
+    <div class=kpi>Valid</div>
+    <div class=muted>Append-only, hash-chained</div></div>
+</div>
+<div class=card><h2>Missions</h2>
+<table><thead><tr><th>ID</th><th>Mission / target</th><th>Who</th><th>Status</th><th>Outcome</th></tr></thead>
+<tbody><tr><td class=mono>M000</td><td>Bootstrap: build the first product and launch assets<div class=muted>Product zip builds with 0 failing automated checks; landing page, marketing drafts, dashboard and tests exist.</div></td><td>agent</td><td><span class='badge info'>active</span></td><td class=muted></td></tr><tr><td class=mono>M001</td><td>Verify the kit in Roblox Studio and capture real previews<div class=muted>14/14 steps of docs/STUDIO_TEST_CHECKLIST.md pass; &gt;= 4 real screenshots or 1 short GIF.</div></td><td>human</td><td><span class='badge neutral'>planned</span></td><td class=muted></td></tr><tr><td class=mono>M002</td><td>Publish a paid listing (owner action)<div class=muted>1 public listing with a working paid checkout and the zip attached.</div></td><td>human</td><td><span class='badge neutral'>planned</span></td><td class=muted></td></tr><tr><td class=mono>M003</td><td>Launch distribution in legitimate channels<div class=muted>&gt;= 3 posts in channels whose rules allow it, and &gt;= 100 listing page views within 14 days (store analytics).</div></td><td>human</td><td><span class='badge neutral'>planned</span></td><td class=muted></td></tr><tr><td class=mono>M004</td><td>Conversion review and listing fix (read-only agent + owner)<div class=muted>1 concrete listing change shipped; view-to-purchase rate measured before and after over 7 days each.</div></td><td>agent</td><td><span class='badge neutral'>planned</span></td><td class=muted></td></tr><tr><td class=mono>M005</td><td>Free &#x27;Lite&#x27; lead magnet linking to the full kit<div class=muted>Lite version published for free; &gt;= 1 owner-verified sale of the full kit within 21 days.</div></td><td>human</td><td><span class='badge neutral'>planned</span></td><td class=muted></td></tr></tbody></table></div>
+<div class=card><h2>Failed missions</h2><ul><li class=muted>None</li></ul></div>
+<div class=card><h2>Ledger (newest first)</h2>
+<table><thead><tr><th>#</th><th>Date</th><th>Type</th><th class=num>Amount</th><th class=num>CZK</th><th>Reconciled</th><th>Evidence</th></tr></thead>
+<tbody><tr><td colspan=7 class=muted>No verified money events yet. Revenue is 0 CZK until the owner records a real sale.</td></tr></tbody></table></div>
+<div class=card><h2>What is not automated</h2><ul><li><b>payments:</b> NOT INTEGRATED - owner sells via a store account they create; sales are entered manually</li><li><b>publishing:</b> NOT AUTOMATED - owner posts drafts from marketing/ by hand</li><li><b>roblox studio:</b> NOT AVAILABLE in build environment - Studio test is mission M001</li><li><b>paid apis:</b> NONE USED</li></ul></div>
+<p class=muted>Generated 2026-10-09T22:17:30+00:00 from state.json and ledger.json. Refresh with
+<code>python3 s2e.py dashboard</code>. This page is a snapshot; it does not earn money or run anything.</p>
+</main></body></html>

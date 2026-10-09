@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "base_currency": "CZK",
+  "note": "Append-only. Only the owner adds entries via `python3 s2e.py ledger add`. Never edit by hand: the hash chain will flag it.",
+  "entries": []
+}

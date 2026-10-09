@@ -1,0 +1,25 @@
+{
+  "id": "M003",
+  "title": "Launch distribution in legitimate channels",
+  "kind": "mission",
+  "executor": "human",
+  "goal": "Get the listing in front of Roblox developers without spam.",
+  "measurable_target": ">= 3 posts in channels whose rules allow it, and >= 100 listing page views within 14 days (store analytics).",
+  "deliverable": "List of post URLs + screenshot of store analytics after 14 days.",
+  "acceptance_criteria": [
+    "At least 3 posts published by the owner, each following that channel's self-promotion rules",
+    "Post URLs recorded in evidence",
+    "Listing views >= 100 within 14 days according to the store's own analytics"
+  ],
+  "human_steps": [
+    "Read marketing/channels.md; check each channel's current rules before posting.",
+    "Use the drafts in marketing/launch-posts.md (edit them in your own voice).",
+    "Post max once per channel; answer questions honestly.",
+    "After 14 days, record views/clicks from store analytics."
+  ],
+  "status": "planned",
+  "started_at": null,
+  "ended_at": null,
+  "outcome": null,
+  "evidence": null
+}

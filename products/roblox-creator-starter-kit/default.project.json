@@ -1,0 +1,71 @@
+{
+  "name": "RobloxCreatorStarterKit",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "StarterKit": {
+        "$className": "Folder",
+        "Shared": {
+          "$path": "src/Shared"
+        },
+        "UI": {
+          "$path": "src/Client/Components"
+        }
+      }
+    },
+    "ServerScriptService": {
+      "StarterKitServer": {
+        "$path": "src/Server"
+      },
+      "StarterKitExamples": {
+        "$path": "examples"
+      }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "StarterKitClient": {
+          "$path": "src/Client/StarterKitClient.client.luau"
+        }
+      }
+    },
+    "Workspace": {
+      "Baseplate": {
+        "$className": "Part",
+        "$properties": {
+          "Anchored": true,
+          "Size": [
+            512,
+            20,
+            512
+          ],
+          "Position": [
+            0,
+            -10,
+            0
+          ],
+          "Color": [
+            0.388,
+            0.372,
+            0.384
+          ]
+        }
+      },
+      "SpawnLocation": {
+        "$className": "SpawnLocation",
+        "$properties": {
+          "Anchored": true,
+          "Size": [
+            12,
+            1,
+            12
+          ],
+          "Position": [
+            0,
+            0.5,
+            0
+          ]
+        }
+      }
+    }
+  }
+}

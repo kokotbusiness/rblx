@@ -1,0 +1,19 @@
+Roblox Creator Starter Kit - License (draft, review before selling)
+
+Copyright (c) 2026 the seller listed on the store page.
+
+You MAY:
+  - use and modify the kit in any number of your own Roblox experiences,
+    including commercial / monetized experiences;
+  - use it in client work, as long as the client receives it only as part of a game.
+
+You MAY NOT:
+  - resell, sublicense, share or publish the source code or the kit itself
+    (free or paid), in whole or in substantial part, including on the Roblox
+    Creator Store, as a "kit", "template" or "uncopylocked" place.
+
+No warranty. The kit is provided "as is". The seller is not liable for lost data,
+lost Robux or moderation actions. Test in Roblox Studio before shipping.
+
+Roblox is a trademark of Roblox Corporation. This kit is not affiliated with or
+endorsed by Roblox Corporation.

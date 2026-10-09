@@ -1,0 +1,22 @@
+{
+  "id": "M000",
+  "title": "Bootstrap: build the first product and launch assets",
+  "kind": "bootstrap",
+  "executor": "agent",
+  "goal": "Turn zero into a real, sellable, honestly documented product plus everything needed to list it.",
+  "measurable_target": "Product zip builds with 0 failing automated checks; landing page, marketing drafts, dashboard and tests exist.",
+  "deliverable": "products/roblox-creator-starter-kit/dist/RobloxCreatorStarterKit-v1.0.0.zip, landing-page/index.html, marketing/*, dashboard.html",
+  "acceptance_criteria": [
+    "tools/build.py reports PASS for Luau unit tests, strict type check and Roblox API type check",
+    "Rojo builds the demo place and the zip is produced",
+    "python3 -m unittest discover -s tests passes",
+    "Landing page and marketing contain no fake testimonials, customer counts or sales claims",
+    "Nothing claims Roblox Studio testing was done"
+  ],
+  "status": "active",
+  "started_at": "2026-10-09T21:42:00+00:00",
+  "ended_at": null,
+  "outcome": null,
+  "evidence": null,
+  "notes": "Bootstrap does not count toward the 5-mission limit and is not a sale."
+}

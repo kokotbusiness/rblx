@@ -1,0 +1,7 @@
+.tools/
+__pycache__/
+*.pyc
+worker-output/*
+!worker-output/.gitkeep
+backups/*
+!backups/.gitkeep

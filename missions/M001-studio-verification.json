@@ -1,0 +1,27 @@
+{
+  "id": "M001",
+  "title": "Verify the kit in Roblox Studio and capture real previews",
+  "kind": "mission",
+  "executor": "human",
+  "goal": "Turn 'type-checked' into 'actually works in Studio' and get honest screenshots for the listing.",
+  "measurable_target": "14/14 steps of docs/STUDIO_TEST_CHECKLIST.md pass; >= 4 real screenshots or 1 short GIF.",
+  "deliverable": "Filled checklist (results column) + images in products/roblox-creator-starter-kit/media/",
+  "acceptance_criteria": [
+    "All 14 checklist steps pass (or failures were fixed and re-tested)",
+    "No red errors in the Output window during the play-test",
+    "At least 4 real in-Studio screenshots saved (quests, spin, shop, backpack)"
+  ],
+  "human_steps": [
+    "Install Roblox Studio (free) if you don't have it.",
+    "Open products/roblox-creator-starter-kit/dist/RobloxCreatorStarterKit-v1.0.0.rbxlx.",
+    "Work through docs/STUDIO_TEST_CHECKLIST.md and fill in the Result column.",
+    "If a step fails, copy the Output error text into a new Claude Code session and ask for a fix; rebuild with tools/build.py.",
+    "Take screenshots of the 4 panels and save them to products/roblox-creator-starter-kit/media/.",
+    "Replace the HTML mockups on landing-page/index.html with the real screenshots (optional but recommended)."
+  ],
+  "status": "planned",
+  "started_at": null,
+  "ended_at": null,
+  "outcome": null,
+  "evidence": null
+}

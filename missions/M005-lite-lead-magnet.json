@@ -1,0 +1,24 @@
+{
+  "id": "M005",
+  "title": "Free 'Lite' lead magnet linking to the full kit",
+  "kind": "mission",
+  "executor": "human",
+  "goal": "Use a free, useful slice (Wallet + DailySpin) to reach developers who would not pay blind.",
+  "measurable_target": "Lite version published for free; >= 1 owner-verified sale of the full kit within 21 days.",
+  "deliverable": "Free Lite listing URL + ledger entry of a verified sale (or a failure reason).",
+  "acceptance_criteria": [
+    "Lite package contains only free-to-share modules and clearly links to the paid kit",
+    "Lite listing is public",
+    "At least 1 sale of the full kit verified by the owner and recorded in ledger.json"
+  ],
+  "human_steps": [
+    "Ask Claude Code to package a Lite zip (Wallet + DailySpin + docs).",
+    "Publish it free on the same store and/or Roblox Creator Store.",
+    "Track sales; record any real sale with: python3 s2e.py ledger add --type sale ..."
+  ],
+  "status": "planned",
+  "started_at": null,
+  "ended_at": null,
+  "outcome": null,
+  "evidence": null
+}

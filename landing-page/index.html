@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roblox Creator Starter Kit</title>
+<meta name="description" content="Server-authoritative Luau systems and a clean UI for daily quests, daily spin, gamepass shop, inventory and currencies. Unit-tested logic, one config file.">
+<style>
+:root {
+  --bg:#0f1220; --bg2:#151a2c; --card:#1b2135; --card2:#232a42; --line:#2f3755;
+  --text:#eef1f8; --muted:#9aa3ba; --primary:#5b8cff; --primary2:#3f6be0; --good:#2fbf71;
+  --gold:#f5c542; --purple:#8b5cf6; --pink:#ec4899; --red:#ef4444; --amber:#f59e0b; --blue:#3b82f6;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) { --bg:#f6f7fb; --bg2:#eef1f8; --card:#ffffff; --card2:#f1f3f9; --line:#dfe3ee; --text:#141826; --muted:#5d6475; }
+}
+* { box-sizing:border-box }
+html { scroll-behavior:smooth }
+body { margin:0; font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text) }
+a { color:var(--primary) }
+.wrap { max-width:1120px; margin:0 auto; padding:0 16px }
+nav { display:flex; justify-content:space-between; align-items:center; padding:18px 0 }
+.logo { font-weight:800; letter-spacing:-.02em }
+.logo span { color:var(--primary) }
+.btn { display:inline-block; background:var(--primary); color:#fff; text-decoration:none; font-weight:700; padding:12px 22px; border-radius:12px; transition:transform .12s, background .12s }
+.btn:hover { background:var(--primary2); transform:translateY(-1px) }
+.btn.ghost { background:transparent; border:1px solid var(--line); color:var(--text) }
+.hero { display:grid; grid-template-columns:1.05fr 1fr; gap:40px; align-items:center; padding:40px 0 64px }
+.hero h1 { font-size:clamp(32px,5vw,52px); line-height:1.08; letter-spacing:-.03em; margin:0 0 16px }
+.hero p.lead { font-size:19px; color:var(--muted); margin:0 0 26px }
+.chips { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 26px; padding:0; list-style:none }
+.chips li { background:var(--card); border:1px solid var(--line); padding:4px 12px; border-radius:99px; font-size:14px }
+.cta-row { display:flex; gap:12px; flex-wrap:wrap; align-items:center }
+.note { font-size:13px; color:var(--muted) }
+section { padding:56px 0 }
+section h2 { font-size:clamp(24px,3.4vw,34px); letter-spacing:-.02em; margin:0 0 8px }
+section > .wrap > p.sub { color:var(--muted); margin:0 0 28px; max-width:720px }
+.features { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:16px }
+.feature { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:20px }
+.feature h3 { margin:6px 0 6px; font-size:18px }
+.feature p { margin:0; color:var(--muted); font-size:15px }
+.icon { width:36px; height:36px; border-radius:10px; display:grid; place-items:center; font-weight:800; color:#fff }
+
+/* ---- in-game UI mockups (HTML/CSS, not screenshots) ---- */
+.mock { background:linear-gradient(180deg,#1e2436,#141826); border:2px solid #3a4360; border-radius:18px; padding:14px; color:#f4f6fb; font-family:"Gotham","Montserrat",system-ui,sans-serif; box-shadow:0 20px 50px rgba(0,0,0,.35) }
+.mock h4 { margin:0 0 12px; font-size:18px; display:flex; justify-content:space-between; align-items:center }
+.mock h4 b { background:#2a3148; border-radius:8px; width:28px; height:28px; display:grid; place-items:center; font-size:13px }
+.pills { display:flex; gap:10px; justify-content:center; margin-bottom:14px }
+.pill { display:flex; align-items:center; gap:8px; background:#1e2436; border:1px solid #3a4360; border-radius:99px; padding:6px 14px 6px 8px; font-weight:700 }
+.dot { width:20px; height:20px; border-radius:50%; border:1px solid #fff }
+.quest { background:#1e2436; border:1px solid #3a4360; border-radius:12px; padding:12px; display:grid; grid-template-columns:1fr auto; gap:4px 12px; align-items:center; margin-bottom:10px }
+.quest .t { font-weight:700 }
+.quest .s { font-size:13px; color:#9aa3ba }
+.progress { grid-column:1; height:8px; background:#2a3148; border-radius:99px; overflow:hidden }
+.progress i { display:block; height:100%; background:linear-gradient(90deg,#5b8cff,#2fbf71) }
+.qbtn { grid-row:1 / span 3; grid-column:2; border-radius:10px; padding:8px 16px; font-weight:700; font-size:14px; background:#2a3148; color:#9aa3ba }
+.qbtn.go { background:#2fbf71; color:#fff }
+.gallery { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:18px }
+.ring { position:relative; height:250px }
+.tile { position:absolute; width:86px; height:50px; border-radius:10px; text-align:center; font-size:12px; font-weight:700; padding-top:6px; transform:translate(-50%,-50%) }
+.tile small { display:block; font-weight:500; opacity:.85 }
+.tile.sel { outline:4px solid #fff }
+.spinbtn { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); background:#2fbf71; border-radius:10px; padding:10px 24px; font-weight:800 }
+.shop { display:grid; grid-template-columns:1fr 1fr; gap:10px }
+.scard { background:#1e2436; border:1px solid #3a4360; border-radius:12px; padding:10px; display:flex; flex-direction:column; gap:4px }
+.scard .s { font-size:12px; color:#9aa3ba; flex:1 }
+.scard .b { background:#5b8cff; border-radius:8px; text-align:center; padding:6px; font-weight:700; font-size:13px }
+.scard .b.own { background:#2a3148; color:#9aa3ba }
+.grid-inv { display:grid; grid-template-columns:repeat(5,1fr); gap:8px }
+.slot { aspect-ratio:1; background:#1e2436; border:1.5px solid #3a4360; border-radius:10px; font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; text-align:center; position:relative; padding:4px }
+.slot em { position:absolute; right:5px; bottom:3px; font-style:normal; color:#9aa3ba; font-size:10px }
+.mock-caption { font-size:13px; color:var(--muted); margin-top:8px; text-align:center }
+
+pre { background:var(--bg2); border:1px solid var(--line); border-radius:14px; padding:18px; overflow-x:auto; font-size:14px; line-height:1.55 }
+code { font-family:ui-monospace,Menlo,Consolas,monospace }
+.k { color:#c792ea } .s2 { color:#c3e88d } .c { color:#7f8aa8 } .f { color:#82aaff }
+table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden }
+th, td { text-align:left; padding:12px 14px; border-bottom:1px solid var(--line); font-size:15px; vertical-align:top }
+th { color:var(--muted); font-size:13px; text-transform:uppercase; letter-spacing:.04em }
+.yes { color:var(--good); font-weight:700 } .no { color:var(--red); font-weight:700 }
+.price { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:center; background:var(--card); border:1px solid var(--line); border-radius:20px; padding:32px }
+.amount { font-size:52px; font-weight:800; letter-spacing:-.03em }
+.price ul { margin:0; padding-left:20px; color:var(--muted) }
+details { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px 18px; margin-bottom:10px }
+summary { cursor:pointer; font-weight:700 }
+details p { color:var(--muted); margin:10px 0 0 }
+footer { padding:40px 0; color:var(--muted); font-size:14px; border-top:1px solid var(--line) }
+@media (max-width:820px) {
+  .hero, .price { grid-template-columns:1fr }
+  .hero { padding-top:16px }
+}
+@media (max-width:420px) { .shop { grid-template-columns:1fr } .grid-inv { grid-template-columns:repeat(4,1fr) } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <div class="logo">Creator<span>Starter</span>Kit</div>
+    <!-- Replace LISTING_URL with the real store link after mission M002 -->
+    <a class="btn ghost" href="LISTING_URL">Get the kit</a>
+  </nav>
+
+  <header class="hero">
+    <div>
+      <h1>Daily quests, daily spin, shop &amp; backpack for your Roblox game.</h1>
+      <p class="lead">Server-authoritative Luau systems plus a clean UI, configured from one file.
+        The logic is unit-tested and type-checked against the Roblox API, so you spend your time on your game and not on rebuilding the same five systems.</p>
+      <ul class="chips">
+        <li>Daily quests</li><li>Daily spin</li><li>Gamepass &amp; product shop</li><li>Inventory</li><li>Currencies</li><li>DataStore saving</li>
+      </ul>
+      <div class="cta-row">
+        <a class="btn" href="LISTING_URL">Get the kit &ndash; $14</a>
+        <a class="btn ghost" href="#inside">See what&rsquo;s inside</a>
+      </div>
+      <p class="note">Price placeholder: final price is set on the store page. Instant download (.zip with source, docs and a demo place).</p>
+    </div>
+    <div class="mock" aria-label="HTML mockup of the kit's quest panel">
+      <div class="pills">
+        <div class="pill"><span class="dot" style="background:var(--gold)"></span>1.5K</div>
+        <div class="pill"><span class="dot" style="background:#7b61ff"></span>12</div>
+      </div>
+      <h4>Daily Quests <b>X</b></h4>
+      <div class="quest"><div class="t">Collect 100 coins</div><div class="qbtn go">Claim</div>
+        <div class="s">100 / 100 &middot; Reward: 50 Coins</div><div class="progress"><i style="width:100%"></i></div></div>
+      <div class="quest"><div class="t">Play for 15 minutes</div><div class="qbtn">In progress</div>
+        <div class="s">9 / 15 &middot; Reward: 75 Coins</div><div class="progress"><i style="width:60%"></i></div></div>
+      <div class="quest"><div class="t">Spin the daily wheel</div><div class="qbtn">Claimed</div>
+        <div class="s">1 / 1 &middot; Reward: 25 Coins</div><div class="progress"><i style="width:100%"></i></div></div>
+      <div class="s" style="font-size:13px;color:#9aa3ba">New quests in 07:42:19</div>
+    </div>
+  </header>
+</div>
+
+<section id="inside" style="background:var(--bg2)">
+  <div class="wrap">
+    <h2>What&rsquo;s inside</h2>
+    <p class="sub">Five systems most simulators and tycoons need, written to work together, with the security-sensitive parts on the server.</p>
+    <div class="features">
+      <div class="feature"><div class="icon" style="background:var(--primary)">Q</div><h3>Daily quests</h3>
+        <p>Quest pool, N quests per UTC day (same for every player), progress from any event in one line, claim once, reset timer.</p></div>
+      <div class="feature"><div class="icon" style="background:var(--pink)">S</div><h3>Daily spin</h3>
+        <p>Free reward wheel with weights. Odds are calculated and shown on every tile. Server-side roll and cooldown.</p></div>
+      <div class="feature"><div class="icon" style="background:var(--amber)">$</div><h3>Shop</h3>
+        <p>Gamepasses with perks, developer products with a receipt handler that never grants twice, and a soft-currency shop with automatic refunds.</p></div>
+      <div class="feature"><div class="icon" style="background:var(--good)">B</div><h3>Inventory / backpack</h3>
+        <p>Capacity, stack limits, all-or-nothing add/remove, equip, sort by rarity, rarity-coloured grid UI.</p></div>
+      <div class="feature"><div class="icon" style="background:var(--purple)">C</div><h3>Currencies</h3>
+        <p>Multiple currencies, no negative/fractional exploits, balance cap, 1.5K / 2.4M formatting, animated currency bar.</p></div>
+      <div class="feature"><div class="icon" style="background:var(--blue)">D</div><h3>Saving &amp; config</h3>
+        <p>DataStore with UpdateAsync, retries, autosave and shutdown save. All gameplay values live in one <code>KitConfig</code> file.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Preview</h2>
+    <p class="sub">These are HTML recreations of the kit&rsquo;s UI style (same colours and layout as the code), not Roblox Studio screenshots. Real screenshots will replace them.</p>
+    <div class="gallery">
+      <div>
+        <div class="mock"><h4>Daily Spin <b>X</b></h4>
+          <div class="ring">
+            <div class="tile" style="left:50%;top:13%;background:var(--blue)">25 Coins<small>35.0%</small></div>
+            <div class="tile sel" style="left:82%;top:31%;background:var(--good)">75 Coins<small>25.0%</small></div>
+            <div class="tile" style="left:82%;top:69%;background:var(--amber)">200 Coins<small>15.0%</small></div>
+            <div class="tile" style="left:50%;top:87%;background:var(--purple)">1 Gem<small>15.0%</small></div>
+            <div class="tile" style="left:18%;top:69%;background:var(--pink)">5 Gems<small>8.0%</small></div>
+            <div class="tile" style="left:18%;top:31%;background:var(--red)">1,000 Coins<small>2.0%</small></div>
+            <div class="spinbtn">Spin!</div>
+          </div></div>
+        <div class="mock-caption">Daily spin with odds on every tile</div>
+      </div>
+      <div>
+        <div class="mock"><h4>Shop <b>X</b></h4>
+          <div class="shop">
+            <div class="scard"><b>VIP</b><span class="s">2x daily quest rewards</span><span class="b own">Owned</span></div>
+            <div class="scard"><b>1,000 Coins</b><span class="s">Robux purchase</span><span class="b">R$ 49</span></div>
+            <div class="scard"><b>5 Apples</b><span class="s">Paid with in-game currency</span><span class="b">50 Coins</span></div>
+            <div class="scard"><b>Starter Sword</b><span class="s">Paid with in-game currency</span><span class="b">10 Gems</span></div>
+          </div></div>
+        <div class="mock-caption">Gamepasses, developer products and soft-currency offers</div>
+      </div>
+      <div>
+        <div class="mock"><h4>Backpack <b>X</b></h4>
+          <div class="s" style="font-size:13px;color:#9aa3ba;margin-bottom:10px">4 / 24 slots</div>
+          <div class="grid-inv">
+            <div class="slot" style="border:3px solid var(--primary);background:#2a3148">Starter Sword</div>
+            <div class="slot" style="border-color:var(--good)">Wooden Shield</div>
+            <div class="slot" style="border-color:var(--good)">Speed Potion<em>x3</em></div>
+            <div class="slot">Apple<em>x42</em></div>
+            <div class="slot"></div><div class="slot"></div><div class="slot"></div><div class="slot"></div><div class="slot"></div><div class="slot"></div>
+          </div></div>
+        <div class="mock-caption">Rarity-coloured inventory with equip and sort</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section style="background:var(--bg2)">
+  <div class="wrap">
+    <h2>One line to connect your game</h2>
+    <p class="sub">Report progress from anywhere on the server. Quests listening to that event update and the UI refreshes.</p>
+<pre><code><span class="k">local</span> Kit = <span class="f">require</span>(game.ServerScriptService.StarterKitServer.StarterKitService)
+
+<span class="c">-- an enemy died, a coin was collected, a lap was finished...</span>
+Kit.<span class="f">recordQuestEvent</span>(player, <span class="s2">"EnemyKilled"</span>, 1)
+Kit.<span class="f">addCurrency</span>(player, <span class="s2">"Coins"</span>, 25)
+Kit.<span class="f">giveItem</span>(player, <span class="s2">"potion"</span>, 1)
+
+<span class="c">-- KitConfig.luau: add a quest</span>
+{ id = <span class="s2">"kill_10"</span>, event = <span class="s2">"EnemyKilled"</span>, target = 10, title = <span class="s2">"Defeat 10 enemies"</span>,
+  reward = { currency = <span class="s2">"Coins"</span>, amount = 120 } },</code></pre>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>What has been tested, and what hasn&rsquo;t</h2>
+    <p class="sub">So you know exactly what you&rsquo;re getting.</p>
+    <table>
+      <thead><tr><th>Check</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>23 unit tests for quests, spin, inventory, shop, currencies and saving schema (open-source Luau runtime)</td><td class="yes">Passing</td></tr>
+        <tr><td>Strict type check of every script against the Roblox API definitions (luau-lsp)</td><td class="yes">Passing</td></tr>
+        <tr><td>Demo place builds with Rojo</td><td class="yes">Builds</td></tr>
+        <tr><td>Play-test in Roblox Studio (14-step checklist included)</td><td class="no">Not yet done &ndash; update this row after mission M001</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="pricing" style="background:var(--bg2)">
+  <div class="wrap">
+    <div class="price">
+      <div>
+        <h2>Roblox Creator Starter Kit</h2>
+        <div class="amount">$14</div>
+        <p class="note">Placeholder price &ndash; the store page shows the final price. One-time payment, use in unlimited own games.</p>
+        <a class="btn" href="LISTING_URL">Get the kit</a>
+      </div>
+      <ul>
+        <li>Full Luau source (server, shared logic, UI components)</li>
+        <li>Demo place (.rbxlx) &ndash; open and press Play</li>
+        <li>Rojo project file for VS Code workflows</li>
+        <li>Install, customise and API docs</li>
+        <li>Unit tests you can run after your changes</li>
+        <li>Free updates for v1.x</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>FAQ</h2>
+    <details><summary>Do I need Rojo or VS Code?</summary><p>No. Open the demo place in Roblox Studio and copy three folders into your game. Rojo is optional.</p></details>
+    <details><summary>Is the spin wheel a paid loot box?</summary><p>No. It is free, once per day, and shows its odds. If you make spins purchasable, Roblox&rsquo;s rules for paid random items apply &ndash; check them first.</p></details>
+    <details><summary>Will developer products be granted twice?</summary><p>The receipt handler remembers purchase IDs, only confirms after saving, and is covered by unit tests for duplicates and failed grants.</p></details>
+    <details><summary>Does it work with ProfileStore / my own data system?</summary><p>Yes. The game logic modules are pure Luau with no Roblox calls; the saving layer is one file you can swap.</p></details>
+    <details><summary>Can I resell it?</summary><p>No. You can use it in any number of your own games, including commercial ones, but not redistribute the source.</p></details>
+    <details><summary>Refunds?</summary><p>If the kit doesn&rsquo;t work as described, contact the seller through the store page. [Owner: fill in your refund policy before publishing.]</p></details>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    Roblox is a trademark of Roblox Corporation. This kit is an independent product, not affiliated with or endorsed by Roblox Corporation.
+  </div>
+</footer>
+</body>
+</html>

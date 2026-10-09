@@ -1,0 +1,2332 @@
+<roblox version="4">
+  <Item class="ReplicatedStorage" referent="0">
+    <Properties>
+      <string name="Name">ReplicatedStorage</string>
+    </Properties>
+    <Item class="Folder" referent="1">
+      <Properties>
+        <string name="Name">StarterKit</string>
+      </Properties>
+      <Item class="Folder" referent="2">
+        <Properties>
+          <string name="Name">Shared</string>
+        </Properties>
+        <Item class="ModuleScript" referent="3">
+          <Properties>
+            <string name="Name">DailyQuests</string>
+            <string name="Source"><![CDATA[--!strict
+--[[
+	DailyQuests
+	Engine-independent daily quest logic. No Roblox APIs: time is passed in as a
+	Unix timestamp (use os.time() on the server), so the module is unit-testable.
+
+	Each UTC day, every player gets the same `questsPerDay` quests picked from
+	the pool (deterministic per day + seed, so it's fair and reproducible).
+	Progress is reported with events, e.g. Quests.recordEvent(state, def, "CoinsCollected", 5, now).
+
+	Quest definition:
+		{ id = "collect_coins", event = "CoinsCollected", target = 100,
+		  title = "Collect 100 coins", reward = { currency = "Coins", amount = 50 } }
+
+	Player state (save this in your player data):
+		{ day = 20000, quests = { { id = "...", progress = 0, claimed = false }, ... } }
+]]
+
+local DailyQuests = {}
+
+local SECONDS_PER_DAY = 86400
+
+export type Reward = { currency: string, amount: number }
+export type QuestDef = { id: string, event: string, target: number, title: string, reward: Reward }
+export type Config = { pool: { QuestDef }, questsPerDay: number, seed: number? }
+export type QuestProgress = { id: string, progress: number, claimed: boolean }
+export type State = { day: number, quests: { QuestProgress } }
+
+function DailyQuests.dayIndex(now: number): number
+	return math.floor(now / SECONDS_PER_DAY)
+end
+
+function DailyQuests.secondsUntilReset(now: number): number
+	return SECONDS_PER_DAY - (math.floor(now) % SECONDS_PER_DAY)
+end
+
+-- Validates a config and returns (ok, errorMessage?). Call once at startup.
+function DailyQuests.validateConfig(config: Config): (boolean, string?)
+	if type(config.pool) ~= "table" or #config.pool == 0 then
+		return false, "pool must contain at least one quest"
+	end
+	if type(config.questsPerDay) ~= "number" or config.questsPerDay < 1 or config.questsPerDay > #config.pool then
+		return false, "questsPerDay must be between 1 and the pool size"
+	end
+	local seen: { [string]: boolean } = {}
+	for _, quest in config.pool do
+		if type(quest.id) ~= "string" or seen[quest.id] then
+			return false, "quest ids must be unique strings"
+		end
+		seen[quest.id] = true
+		if type(quest.target) ~= "number" or quest.target < 1 or math.floor(quest.target) ~= quest.target then
+			return false, "quest " .. quest.id .. " needs a whole-number target >= 1"
+		end
+		if type(quest.reward) ~= "table" or type(quest.reward.amount) ~= "number" or quest.reward.amount < 0 then
+			return false, "quest " .. quest.id .. " has an invalid reward"
+		end
+	end
+	return true, nil
+end
+
+-- Small deterministic PRNG (LCG) so quest selection is identical on every
+-- server and in tests. Not for anything security sensitive.
+local function lcg(seed: number): () -> number
+	local state = seed % 2147483647
+	if state <= 0 then
+		state += 2147483646
+	end
+	return function(): number
+		state = (state * 48271) % 2147483647
+		return state
+	end
+end
+
+-- Returns the quest definitions active on the given day.
+function DailyQuests.questsForDay(config: Config, day: number): { QuestDef }
+	local indices = {}
+	for i = 1, #config.pool do
+		indices[i] = i
+	end
+	local nextRandom = lcg(day * 7919 + (config.seed or 0) + 1)
+	-- Fisher-Yates shuffle
+	for i = #indices, 2, -1 do
+		local j = (nextRandom() % i) + 1
+		indices[i], indices[j] = indices[j], indices[i]
+	end
+	local result = {}
+	for i = 1, config.questsPerDay do
+		table.insert(result, config.pool[indices[i]])
+	end
+	return result
+end
+
+local function findDef(config: Config, id: string): QuestDef?
+	for _, quest in config.pool do
+		if quest.id == id then
+			return quest
+		end
+	end
+	return nil
+end
+
+-- Makes sure state belongs to today; resets it on a new day.
+-- Returns the (possibly new) state and whether a reset happened.
+function DailyQuests.refresh(state: State?, config: Config, now: number): (State, boolean)
+	local today = DailyQuests.dayIndex(now)
+	if state and state.day == today then
+		return state, false
+	end
+	local fresh: State = { day = today, quests = {} }
+	for _, quest in DailyQuests.questsForDay(config, today) do
+		table.insert(fresh.quests, { id = quest.id, progress = 0, claimed = false })
+	end
+	return fresh, true
+end
+
+-- Adds progress to every active quest listening to `event`.
+-- Returns the ids of quests that became complete because of this event.
+function DailyQuests.recordEvent(state: State, config: Config, event: string, amount: number, now: number): { string }
+	assert(state.day == DailyQuests.dayIndex(now), "state is stale; call refresh first")
+	if type(amount) ~= "number" or amount <= 0 or amount ~= amount then
+		return {}
+	end
+	local completed = {}
+	for _, progress in state.quests do
+		local def = findDef(config, progress.id)
+		if def and def.event == event and progress.progress < def.target then
+			progress.progress = math.min(def.target, progress.progress + amount)
+			if progress.progress >= def.target then
+				table.insert(completed, def.id)
+			end
+		end
+	end
+	return completed
+end
+
+-- Claims a finished quest. Returns (reward?, errorMessage?).
+-- The caller (server) must then add the reward to the player's wallet.
+function DailyQuests.claim(state: State, config: Config, questId: string, now: number): (Reward?, string?)
+	if state.day ~= DailyQuests.dayIndex(now) then
+		return nil, "quests expired"
+	end
+	for _, progress in state.quests do
+		if progress.id == questId then
+			local def = findDef(config, questId)
+			if not def then
+				return nil, "unknown quest"
+			end
+			if progress.claimed then
+				return nil, "already claimed"
+			end
+			if progress.progress < def.target then
+				return nil, "quest not complete"
+			end
+			progress.claimed = true
+			return { currency = def.reward.currency, amount = def.reward.amount }, nil
+		end
+	end
+	return nil, "quest not active today"
+end
+
+return DailyQuests
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="4">
+          <Properties>
+            <string name="Name">DailySpin</string>
+            <string name="Source"><![CDATA[--!strict
+--[[
+	DailySpin
+	Engine-independent logic for a FREE daily reward wheel.
+
+	* The roll always happens on the server. The client only receives the result
+	  index so it can animate the wheel to the right segment.
+	* Randomness is injected (`random` returns a number in [0, 1)), so the server
+	  can pass `function() return rng:NextNumber() end` with a Roblox `Random`
+	  object and tests can pass a fixed sequence.
+	* Odds are computed from the weights so you can show them to players.
+
+	Policy note: this wheel is designed to be free. If you ever let players pay
+	Robux (directly or indirectly) for spins, Roblox's rules on paid random items
+	apply (e.g. disclosing odds before purchase). Check the current Roblox
+	policies yourself before doing that.
+
+	Segment definition:
+		{ id = "coins_small", label = "50 Coins", weight = 40,
+		  reward = { currency = "Coins", amount = 50 } }
+]]
+
+local DailySpin = {}
+
+export type Reward = { currency: string, amount: number }
+export type Segment = { id: string, label: string, weight: number, reward: Reward, color: string? }
+export type Config = { segments: { Segment }, cooldownSeconds: number }
+export type State = { lastSpinAt: number? }
+
+function DailySpin.validateConfig(config: Config): (boolean, string?)
+	if type(config.segments) ~= "table" or #config.segments < 2 then
+		return false, "the wheel needs at least two segments"
+	end
+	if type(config.cooldownSeconds) ~= "number" or config.cooldownSeconds < 0 then
+		return false, "cooldownSeconds must be >= 0"
+	end
+	local total = 0
+	local seen: { [string]: boolean } = {}
+	for _, segment in config.segments do
+		if type(segment.id) ~= "string" or seen[segment.id] then
+			return false, "segment ids must be unique strings"
+		end
+		seen[segment.id] = true
+		if type(segment.weight) ~= "number" or segment.weight < 0 or segment.weight ~= segment.weight then
+			return false, "segment " .. segment.id .. " has an invalid weight"
+		end
+		if type(segment.reward) ~= "table" or type(segment.reward.amount) ~= "number" or segment.reward.amount < 0 then
+			return false, "segment " .. segment.id .. " has an invalid reward"
+		end
+		total += segment.weight
+	end
+	if total <= 0 then
+		return false, "total weight must be greater than zero"
+	end
+	return true, nil
+end
+
+-- Seconds the player still has to wait (0 = can spin now).
+function DailySpin.secondsUntilNextSpin(state: State, config: Config, now: number): number
+	if state.lastSpinAt == nil then
+		return 0
+	end
+	return math.max(0, (state.lastSpinAt :: number) + config.cooldownSeconds - now)
+end
+
+function DailySpin.canSpin(state: State, config: Config, now: number): boolean
+	return DailySpin.secondsUntilNextSpin(state, config, now) == 0
+end
+
+-- Probability of each segment, in segment order. Values sum to 1.
+function DailySpin.odds(config: Config): { number }
+	local total = 0
+	for _, segment in config.segments do
+		total += segment.weight
+	end
+	local result = {}
+	for i, segment in config.segments do
+		result[i] = segment.weight / total
+	end
+	return result
+end
+
+-- Picks a segment index for a value r in [0, 1).
+function DailySpin.pickIndex(config: Config, r: number): number
+	assert(r >= 0 and r < 1, "random value must be in [0, 1)")
+	local total = 0
+	for _, segment in config.segments do
+		total += segment.weight
+	end
+	local threshold = r * total
+	local cumulative = 0
+	local lastPositive = 1
+	for i, segment in config.segments do
+		if segment.weight > 0 then
+			cumulative += segment.weight
+			lastPositive = i
+			if threshold < cumulative then
+				return i
+			end
+		end
+	end
+	return lastPositive -- floating point safety net
+end
+
+-- Performs a spin. Returns (segmentIndex?, reward?, errorMessage?).
+-- On success, state.lastSpinAt is updated; the caller grants the reward.
+function DailySpin.spin(state: State, config: Config, now: number, random: () -> number): (number?, Reward?, string?)
+	if not DailySpin.canSpin(state, config, now) then
+		return nil, nil, "spin on cooldown"
+	end
+	local index = DailySpin.pickIndex(config, random())
+	local segment = config.segments[index]
+	state.lastSpinAt = now
+	return index, { currency = segment.reward.currency, amount = segment.reward.amount }, nil
+end
+
+return DailySpin
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="5">
+          <Properties>
+            <string name="Name">Inventory</string>
+            <string name="Source"><![CDATA[--!strict
+--[[
+	Inventory
+	Engine-independent backpack/inventory logic: fixed capacity, stackable items,
+	equip slot, sorting. No Roblox APIs.
+
+	Item catalog (shared by client and server):
+		{ sword = { name = "Sword", maxStack = 1, rarity = "Rare", order = 10 },
+		  apple = { name = "Apple", maxStack = 99, rarity = "Common", order = 50 } }
+
+	Inventory data (save this in player data):
+		{ capacity = 20, slots = { { itemId = "apple", count = 12 }, ... }, equipped = "sword" }
+]]
+
+local Inventory = {}
+
+export type ItemDef = { name: string, maxStack: number, rarity: string?, order: number? }
+export type Catalog = { [string]: ItemDef }
+export type Slot = { itemId: string, count: number }
+export type Data = { capacity: number, slots: { Slot }, equipped: string? }
+
+local RARITY_RANK: { [string]: number } = { Common = 1, Uncommon = 2, Rare = 3, Epic = 4, Legendary = 5 }
+
+function Inventory.new(capacity: number): Data
+	assert(type(capacity) == "number" and capacity >= 1 and math.floor(capacity) == capacity, "capacity must be a whole number >= 1")
+	return { capacity = capacity, slots = {}, equipped = nil }
+end
+
+function Inventory.count(data: Data, itemId: string): number
+	local total = 0
+	for _, slot in data.slots do
+		if slot.itemId == itemId then
+			total += slot.count
+		end
+	end
+	return total
+end
+
+-- How many of `itemId` would fit right now.
+function Inventory.spaceFor(data: Data, catalog: Catalog, itemId: string): number
+	local def = catalog[itemId]
+	if not def then
+		return 0
+	end
+	local space = 0
+	for _, slot in data.slots do
+		if slot.itemId == itemId then
+			space += def.maxStack - slot.count
+		end
+	end
+	space += (data.capacity - #data.slots) * def.maxStack
+	return space
+end
+
+-- Adds items, filling existing stacks first. All-or-nothing: if everything
+-- does not fit, nothing is added. Returns (ok, errorMessage?).
+function Inventory.add(data: Data, catalog: Catalog, itemId: string, amount: number): (boolean, string?)
+	local def = catalog[itemId]
+	if not def then
+		return false, "unknown item"
+	end
+	if type(amount) ~= "number" or amount < 1 or math.floor(amount) ~= amount then
+		return false, "invalid amount"
+	end
+	if Inventory.spaceFor(data, catalog, itemId) < amount then
+		return false, "inventory full"
+	end
+	local remaining = amount
+	for _, slot in data.slots do
+		if remaining == 0 then
+			break
+		end
+		if slot.itemId == itemId and slot.count < def.maxStack then
+			local added = math.min(def.maxStack - slot.count, remaining)
+			slot.count += added
+			remaining -= added
+		end
+	end
+	while remaining > 0 do
+		local added = math.min(def.maxStack, remaining)
+		table.insert(data.slots, { itemId = itemId, count = added })
+		remaining -= added
+	end
+	return true, nil
+end
+
+-- Removes items, taking from the last stacks first. All-or-nothing.
+function Inventory.remove(data: Data, itemId: string, amount: number): (boolean, string?)
+	if type(amount) ~= "number" or amount < 1 or math.floor(amount) ~= amount then
+		return false, "invalid amount"
+	end
+	if Inventory.count(data, itemId) < amount then
+		return false, "not enough items"
+	end
+	local remaining = amount
+	for i = #data.slots, 1, -1 do
+		local slot = data.slots[i]
+		if slot.itemId == itemId then
+			local taken = math.min(slot.count, remaining)
+			slot.count -= taken
+			remaining -= taken
+			if slot.count == 0 then
+				table.remove(data.slots, i)
+			end
+			if remaining == 0 then
+				break
+			end
+		end
+	end
+	if data.equipped == itemId and Inventory.count(data, itemId) == 0 then
+		data.equipped = nil
+	end
+	return true, nil
+end
+
+function Inventory.equip(data: Data, itemId: string?): (boolean, string?)
+	if itemId == nil then
+		data.equipped = nil
+		return true, nil
+	end
+	if Inventory.count(data, itemId :: string) == 0 then
+		return false, "item not owned"
+	end
+	data.equipped = itemId
+	return true, nil
+end
+
+-- Sorts slots by rarity (highest first), then catalog `order`, then name.
+function Inventory.sort(data: Data, catalog: Catalog)
+	table.sort(data.slots, function(a: Slot, b: Slot): boolean
+		local da, db = catalog[a.itemId], catalog[b.itemId]
+		local ra: number = if da then (RARITY_RANK[da.rarity or "Common"] or 0) else 0
+		local rb: number = if db then (RARITY_RANK[db.rarity or "Common"] or 0) else 0
+		if ra ~= rb then
+			return ra > rb
+		end
+		local oa: number = if da and da.order then da.order else math.huge
+		local ob: number = if db and db.order then db.order else math.huge
+		if oa ~= ob then
+			return oa < ob
+		end
+		if a.itemId ~= b.itemId then
+			return a.itemId < b.itemId
+		end
+		return a.count > b.count
+	end)
+end
+
+return Inventory
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="6">
+          <Properties>
+            <string name="Name">KitConfig</string>
+            <string name="Source"><![CDATA[--!strict
+--[[
+	KitConfig
+	The ONE file you edit to customise the kit: currencies, quests, wheel,
+	items, shop. Everything here is example data - rename freely.
+
+	Gamepass / product ids of 0 are placeholders. Create them on
+	https://create.roblox.com (your experience -> Monetization) and paste the ids.
+]]
+
+local KitConfig: { [string]: any } = {}
+
+KitConfig.currencies = {
+	{ id = "Coins", label = "Coins", color = "#F5C542", start = 100 },
+	{ id = "Gems", label = "Gems", color = "#7B61FF", start = 0 },
+}
+
+KitConfig.quests = {
+	questsPerDay = 3,
+	seed = 1234, -- change to reshuffle which quests appear on which day
+	pool = {
+		{ id = "collect_coins", event = "CoinsCollected", target = 100, title = "Collect 100 coins", reward = { currency = "Coins", amount = 50 } },
+		{ id = "play_time", event = "MinutesPlayed", target = 15, title = "Play for 15 minutes", reward = { currency = "Coins", amount = 75 } },
+		{ id = "spin_once", event = "WheelSpun", target = 1, title = "Spin the daily wheel", reward = { currency = "Coins", amount = 25 } },
+		{ id = "buy_item", event = "ItemBought", target = 1, title = "Buy any item in the shop", reward = { currency = "Gems", amount = 2 } },
+		{ id = "jump", event = "Jumped", target = 50, title = "Jump 50 times", reward = { currency = "Coins", amount = 40 } },
+	},
+}
+
+KitConfig.spin = {
+	cooldownSeconds = 24 * 60 * 60,
+	segments = {
+		{ id = "coins_s", label = "25 Coins", weight = 35, reward = { currency = "Coins", amount = 25 }, color = "#3B82F6" },
+		{ id = "coins_m", label = "75 Coins", weight = 25, reward = { currency = "Coins", amount = 75 }, color = "#22C55E" },
+		{ id = "coins_l", label = "200 Coins", weight = 15, reward = { currency = "Coins", amount = 200 }, color = "#F59E0B" },
+		{ id = "gems_s", label = "1 Gem", weight = 15, reward = { currency = "Gems", amount = 1 }, color = "#8B5CF6" },
+		{ id = "gems_l", label = "5 Gems", weight = 8, reward = { currency = "Gems", amount = 5 }, color = "#EC4899" },
+		{ id = "jackpot", label = "1,000 Coins", weight = 2, reward = { currency = "Coins", amount = 1000 }, color = "#EF4444" },
+	},
+}
+
+KitConfig.inventoryCapacity = 24
+
+KitConfig.items = {
+	sword = { name = "Starter Sword", maxStack = 1, rarity = "Rare", order = 10 },
+	shield = { name = "Wooden Shield", maxStack = 1, rarity = "Uncommon", order = 20 },
+	potion = { name = "Speed Potion", maxStack = 10, rarity = "Uncommon", order = 30 },
+	apple = { name = "Apple", maxStack = 99, rarity = "Common", order = 50 },
+}
+
+KitConfig.shop = {
+	gamepasses = {
+		vip = { id = 0, name = "VIP", description = "2x daily quest rewards", priceLabel = "R$ 99" },
+	},
+	products = {
+		coins_1000 = { id = 0, name = "1,000 Coins", grant = { currency = "Coins", amount = 1000 }, priceLabel = "R$ 49" },
+		gems_25 = { id = 0, name = "25 Gems", grant = { currency = "Gems", amount = 25 }, priceLabel = "R$ 99" },
+	},
+	offers = {
+		apple = { itemId = "apple", amount = 5, name = "5 Apples", price = { currency = "Coins", amount = 50 } },
+		potion = { itemId = "potion", amount = 1, name = "Speed Potion", price = { currency = "Coins", amount = 150 } },
+		sword = { itemId = "sword", amount = 1, name = "Starter Sword", price = { currency = "Gems", amount = 10 } },
+	},
+}
+
+-- Multiplier applied to quest rewards for owners of the "vip" gamepass.
+KitConfig.vipQuestMultiplier = 2
+
+return KitConfig
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="7">
+          <Properties>
+            <string name="Name">PlayerData</string>
+            <string name="Source"><![CDATA[--!strict
+--[[
+	PlayerData
+	Default player profile + `reconcile`, which fills in missing fields when you
+	add new features to a game that already has saved players. No Roblox APIs.
+]]
+
+local PlayerData = {}
+
+PlayerData.VERSION = 1
+
+local function deepCopy(value: any): any
+	if type(value) ~= "table" then
+		return value
+	end
+	local copy = {}
+	for k, v in value do
+		copy[k] = deepCopy(v)
+	end
+	return copy
+end
+
+PlayerData.deepCopy = deepCopy
+
+-- Builds a fresh profile from the kit config.
+function PlayerData.default(config: any): { [string]: any }
+	local wallet = {}
+	for _, currency in config.currencies do
+		wallet[currency.id] = currency.start or 0
+	end
+	return {
+		version = PlayerData.VERSION,
+		wallet = wallet,
+		quests = nil, -- created on first refresh
+		spin = { lastSpinAt = nil },
+		inventory = { capacity = config.inventoryCapacity, slots = {}, equipped = nil },
+		receipts = { ids = {}, order = {} },
+	}
+end
+
+-- Adds any keys present in `template` but missing in `data` (recursively).
+-- Never overwrites existing values. Returns `data`.
+function PlayerData.reconcile(data: { [string]: any }, template: { [string]: any }): { [string]: any }
+	for key, value in template do
+		if data[key] == nil then
+			data[key] = deepCopy(value)
+		elseif type(data[key]) == "table" and type(value) == "table" then
+			PlayerData.reconcile(data[key], value)
+		end
+	end
+	return data
+end
+
+return PlayerData
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="8">
+          <Properties>
+            <string name="Name">Shop</string>
+            <string name="Source"><![CDATA[--!strict
+--[[
+	Shop
+	Engine-independent shop logic:
+	  * catalog validation (gamepasses, developer products, soft-currency offers)
+	  * idempotent developer-product receipt handling (never grant twice)
+	  * soft-currency purchases (all-or-nothing)
+
+	The Roblox-specific parts (MarketplaceService calls, saving data) live in
+	src/Server/StarterKitServer.server.luau. This module never talks to Roblox.
+
+	Catalog shape (see src/Shared/KitConfig.luau for a full example):
+	{
+		gamepasses = { vip = { id = 0, name = "VIP", description = "...", priceLabel = "R$ 99" } },
+		products   = { coins_1000 = { id = 0, name = "1,000 Coins", grant = { currency = "Coins", amount = 1000 } } },
+		offers     = { apple = { itemId = "apple", amount = 1, price = { currency = "Coins", amount = 25 } } },
+	}
+	IDs of 0 are placeholders: create the gamepass/product on the Roblox
+	Creator Dashboard and paste the real ID.
+]]
+
+local Shop = {}
+
+Shop.MAX_REMEMBERED_RECEIPTS = 200
+
+export type Price = { currency: string, amount: number }
+export type Gamepass = { id: number, name: string, description: string, priceLabel: string? }
+export type Product = { id: number, name: string, grant: Price, priceLabel: string? }
+export type Offer = { itemId: string, amount: number, price: Price, name: string? }
+export type Catalog = {
+	gamepasses: { [string]: Gamepass },
+	products: { [string]: Product },
+	offers: { [string]: Offer },
+}
+-- Persist this per player. `order` keeps insertion order so old ids can be trimmed.
+export type ReceiptLog = { ids: { [string]: boolean }, order: { string } }
+export type Receipt = { PurchaseId: string, ProductId: number, PlayerId: number }
+
+-- Returns (ok, problems). Placeholder ids (0) are reported as warnings, not errors.
+function Shop.validateCatalog(catalog: Catalog): (boolean, { string }, { string })
+	local errors, warnings = {}, {}
+	for _, section in { "gamepasses", "products", "offers" } do
+		if type((catalog :: any)[section]) ~= "table" then
+			table.insert(errors, "catalog." .. section .. " must be a table (use {} when empty)")
+		end
+	end
+	if #errors > 0 then
+		return false, errors, warnings
+	end
+	local productIds: { [number]: string } = {}
+	for key, pass in catalog.gamepasses do
+		if type(pass.id) ~= "number" then
+			table.insert(errors, "gamepass " .. key .. ": id must be a number")
+		elseif pass.id == 0 then
+			table.insert(warnings, "gamepass " .. key .. ": placeholder id 0")
+		end
+	end
+	for key, product in catalog.products do
+		if type(product.id) ~= "number" then
+			table.insert(errors, "product " .. key .. ": id must be a number")
+		elseif product.id == 0 then
+			table.insert(warnings, "product " .. key .. ": placeholder id 0")
+		elseif productIds[product.id] then
+			table.insert(errors, "product " .. key .. ": id duplicates " .. productIds[product.id])
+		else
+			productIds[product.id] = key
+		end
+		if type(product.grant) ~= "table" or type(product.grant.amount) ~= "number" or product.grant.amount <= 0 then
+			table.insert(errors, "product " .. key .. ": grant amount must be > 0")
+		end
+	end
+	for key, offer in catalog.offers do
+		if type(offer.price) ~= "table" or type(offer.price.amount) ~= "number" or offer.price.amount < 0 then
+			table.insert(errors, "offer " .. key .. ": invalid price")
+		end
+		if type(offer.amount) ~= "number" or offer.amount < 1 then
+			table.insert(errors, "offer " .. key .. ": amount must be >= 1")
+		end
+	end
+	return #errors == 0, errors, warnings
+end
+
+function Shop.findProductById(catalog: Catalog, productId: number): (string?, Product?)
+	for key, product in catalog.products do
+		if product.id == productId and product.id ~= 0 then
+			return key, product
+		end
+	end
+	return nil, nil
+end
+
+function Shop.newReceiptLog(): ReceiptLog
+	return { ids = {}, order = {} }
+end
+
+local function remember(log: ReceiptLog, purchaseId: string)
+	log.ids[purchaseId] = true
+	table.insert(log.order, purchaseId)
+	while #log.order > Shop.MAX_REMEMBERED_RECEIPTS do
+		local oldest = table.remove(log.order, 1)
+		if oldest then
+			log.ids[oldest] = nil
+		end
+	end
+end
+
+--[[
+	Decides what to do with a developer-product receipt.
+	`grant(product)` must apply the reward to the player's in-memory data and
+	return true on success. Returns one of:
+	  "Granted"         -> reward applied now; SAVE player data, then return PurchaseGranted
+	  "AlreadyGranted"  -> duplicate callback; return PurchaseGranted without granting
+	  "UnknownProduct"  -> not in catalog; return NotProcessedYet
+	  "GrantFailed"     -> return NotProcessedYet so Roblox retries later
+]]
+function Shop.processReceipt(catalog: Catalog, log: ReceiptLog, receipt: Receipt, grant: (Product) -> boolean): string
+	if log.ids[receipt.PurchaseId] then
+		return "AlreadyGranted"
+	end
+	local _, product = Shop.findProductById(catalog, receipt.ProductId)
+	if not product then
+		return "UnknownProduct"
+	end
+	local ok = grant(product :: Product)
+	if not ok then
+		return "GrantFailed"
+	end
+	remember(log, receipt.PurchaseId)
+	return "Granted"
+end
+
+export type Deps = {
+	canAfford: (currency: string, amount: number) -> boolean,
+	spend: (currency: string, amount: number) -> (boolean, string?),
+	refund: (currency: string, amount: number) -> (),
+	giveItem: (itemId: string, amount: number) -> (boolean, string?),
+}
+
+-- Buys a soft-currency offer. All-or-nothing: if giving the item fails, the
+-- currency is refunded. Returns (ok, errorMessage?).
+function Shop.buyOffer(catalog: Catalog, offerKey: string, deps: Deps): (boolean, string?)
+	local offer = catalog.offers[offerKey]
+	if not offer then
+		return false, "unknown offer"
+	end
+	if not deps.canAfford(offer.price.currency, offer.price.amount) then
+		return false, "insufficient funds"
+	end
+	local spent, spendErr = deps.spend(offer.price.currency, offer.price.amount)
+	if not spent then
+		return false, spendErr
+	end
+	local given, giveErr = deps.giveItem(offer.itemId, offer.amount)
+	if not given then
+		deps.refund(offer.price.currency, offer.price.amount)
+		return false, giveErr
+	end
+	return true, nil
+end
+
+return Shop
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="9">
+          <Properties>
+            <string name="Name">Wallet</string>
+            <string name="Source"><![CDATA[--!strict
+--[[
+	Wallet
+	Pure, engine-independent currency logic (no Roblox APIs), so it can be unit
+	tested outside Studio and reused on the server.
+
+	A wallet is a plain table: { [currencyName]: integer }.
+	All amounts are whole numbers. Balances never go below zero and never exceed
+	MAX_BALANCE. Every mutating function returns (ok, errorMessage?).
+
+	Typical server usage:
+		local Wallet = require(ReplicatedStorage.StarterKit.Shared.Wallet)
+		local ok, err = Wallet.add(profile.wallet, "Coins", 50)
+		local ok2, err2 = Wallet.spend(profile.wallet, "Coins", 30)
+]]
+
+local Wallet = {}
+
+Wallet.MAX_BALANCE = 1e15 -- well inside the exact-integer range of a double
+
+export type WalletData = { [string]: number }
+
+local function isValidAmount(amount: any): boolean
+	return type(amount) == "number"
+		and amount == amount -- not NaN
+		and amount >= 0
+		and amount <= Wallet.MAX_BALANCE
+		and math.floor(amount) == amount
+end
+
+local function isValidCurrency(currency: any): boolean
+	return type(currency) == "string" and #currency > 0 and #currency <= 32
+end
+
+function Wallet.new(initial: WalletData?): WalletData
+	local wallet: WalletData = {}
+	if initial then
+		for currency, amount in initial do
+			assert(isValidCurrency(currency), "invalid currency name")
+			assert(isValidAmount(amount), "invalid starting amount for " .. tostring(currency))
+			wallet[currency] = amount
+		end
+	end
+	return wallet
+end
+
+function Wallet.get(wallet: WalletData, currency: string): number
+	return wallet[currency] or 0
+end
+
+function Wallet.canAfford(wallet: WalletData, currency: string, amount: number): boolean
+	return isValidAmount(amount) and Wallet.get(wallet, currency) >= amount
+end
+
+function Wallet.add(wallet: WalletData, currency: string, amount: number): (boolean, string?)
+	if not isValidCurrency(currency) then
+		return false, "invalid currency"
+	end
+	if not isValidAmount(amount) then
+		return false, "invalid amount"
+	end
+	local newBalance = Wallet.get(wallet, currency) + amount
+	if newBalance > Wallet.MAX_BALANCE then
+		return false, "balance cap reached"
+	end
+	wallet[currency] = newBalance
+	return true, nil
+end
+
+function Wallet.spend(wallet: WalletData, currency: string, amount: number): (boolean, string?)
+	if not isValidCurrency(currency) then
+		return false, "invalid currency"
+	end
+	if not isValidAmount(amount) then
+		return false, "invalid amount"
+	end
+	local balance = Wallet.get(wallet, currency)
+	if balance < amount then
+		return false, "insufficient funds"
+	end
+	wallet[currency] = balance - amount
+	return true, nil
+end
+
+-- Formats a number for compact UI display: 950 -> "950", 1520 -> "1.5K",
+-- 2_400_000 -> "2.4M". Trailing ".0" is removed ("3K", not "3.0K").
+local SUFFIXES = { "K", "M", "B", "T", "Qa" }
+
+function Wallet.format(amount: number): string
+	local negative = amount < 0
+	local value = math.abs(amount)
+	if value < 1000 then
+		local text = tostring(math.floor(value))
+		return if negative then "-" .. text else text
+	end
+	local index = 0
+	while value >= 1000 and index < #SUFFIXES do
+		value /= 1000
+		index += 1
+	end
+	value = math.floor(value * 10) / 10 -- round down, never overstate a balance
+	local text = string.format("%.1f", value):gsub("%.0$", "")
+	text ..= SUFFIXES[index]
+	return if negative then "-" .. text else text
+end
+
+return Wallet
+]]></string>
+          </Properties>
+        </Item>
+      </Item>
+      <Item class="Folder" referent="10">
+        <Properties>
+          <string name="Name">UI</string>
+        </Properties>
+        <Item class="ModuleScript" referent="11">
+          <Properties>
+            <string name="Name">Components</string>
+            <string name="Source"><![CDATA[--[[
+	Components (ModuleScript, ReplicatedStorage.StarterKit.UI.Components)
+
+	Small, dependency-free UI component library built from code, so it is
+	easy to read, diff and restyle. Every component returns a Roblox Instance.
+	Change the look in one place: Components.Theme.
+
+	Components:
+		Panel(title, size)                -> window with header + close button
+		Button(text, style?)              -> rounded button with hover/press tweens
+		CurrencyPill(currency)            -> icon dot + animated amount
+		ProgressBar()                     -> bar with :SetAttribute("Progress", 0..1)
+		QuestCard(quest)                  -> title, progress, reward, claim button
+		ShopCard(name, subtitle, price)   -> card with buy button
+		InventorySlot(slot, equipped)     -> grid cell with rarity stroke
+		Toast(parent, text, kind)         -> temporary notification
+
+	NOTE: Uses Roblox UI APIs; not executed in Roblox Studio by the kit author.
+	See docs/STUDIO_TEST_CHECKLIST.md.
+]]
+
+local TweenService = game:GetService("TweenService")
+
+local Components = {}
+
+Components.Theme = {
+	Background = Color3.fromHex("#141826"),
+	Surface = Color3.fromHex("#1E2436"),
+	SurfaceRaised = Color3.fromHex("#2A3148"),
+	Stroke = Color3.fromHex("#3A4360"),
+	Text = Color3.fromHex("#F4F6FB"),
+	TextMuted = Color3.fromHex("#9AA3BA"),
+	Primary = Color3.fromHex("#5B8CFF"),
+	PrimaryDark = Color3.fromHex("#3F6BE0"),
+	Success = Color3.fromHex("#2FBF71"),
+	Danger = Color3.fromHex("#E5484D"),
+	Warning = Color3.fromHex("#F5A524"),
+	Font = Enum.Font.GothamMedium,
+	FontBold = Enum.Font.GothamBold,
+	Radius = UDim.new(0, 12),
+	Rarity = {
+		Common = Color3.fromHex("#9AA3BA"),
+		Uncommon = Color3.fromHex("#2FBF71"),
+		Rare = Color3.fromHex("#5B8CFF"),
+		Epic = Color3.fromHex("#A855F7"),
+		Legendary = Color3.fromHex("#F5A524"),
+	},
+}
+
+local Theme = Components.Theme
+local FAST = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local SMOOTH = TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+
+local function create(className: string, props: { [string]: any }, children: { Instance }?): Instance
+	local instance = Instance.new(className)
+	for prop, value in props do
+		(instance :: any)[prop] = value
+	end
+	for _, child in (children or {}) :: { Instance } do
+		child.Parent = instance
+	end
+	return instance
+end
+Components.create = create
+
+local function corner(radius: UDim?): Instance
+	return create("UICorner", { CornerRadius = radius or Theme.Radius })
+end
+
+local function stroke(color: Color3?, thickness: number?): Instance
+	return create("UIStroke", {
+		Color = color or Theme.Stroke,
+		Thickness = thickness or 1,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	})
+end
+
+local function padding(px: number): Instance
+	return create("UIPadding", {
+		PaddingTop = UDim.new(0, px),
+		PaddingBottom = UDim.new(0, px),
+		PaddingLeft = UDim.new(0, px),
+		PaddingRight = UDim.new(0, px),
+	})
+end
+Components.padding = padding
+
+local function label(text: string, size: number, color: Color3?, bold: boolean?): TextLabel
+	return create("TextLabel", {
+		BackgroundTransparency = 1,
+		Text = text,
+		TextSize = size,
+		TextColor3 = color or Theme.Text,
+		Font = if bold then Theme.FontBold else Theme.Font,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Size = UDim2.new(1, 0, 0, size + 4),
+	}) :: TextLabel
+end
+Components.label = label
+
+function Components.tween(instance: Instance, props: { [string]: any }, info: TweenInfo?)
+	local tween = TweenService:Create(instance, info or SMOOTH, props)
+	tween:Play()
+	return tween
+end
+
+-- Button ---------------------------------------------------------------------
+function Components.Button(text: string, style: string?): TextButton
+	local base = if style == "success" then Theme.Success
+		elseif style == "danger" then Theme.Danger
+		elseif style == "ghost" then Theme.SurfaceRaised
+		else Theme.Primary
+	local button = create("TextButton", {
+		AutoButtonColor = false,
+		BackgroundColor3 = base,
+		Text = text,
+		TextColor3 = Theme.Text,
+		TextSize = 16,
+		Font = Theme.FontBold,
+		Size = UDim2.new(0, 120, 0, 36),
+	}, { corner(UDim.new(0, 10)) }) :: TextButton
+	local scale = create("UIScale", { Scale = 1 }) :: UIScale
+	scale.Parent = button
+	button.MouseEnter:Connect(function()
+		Components.tween(button, { BackgroundColor3 = base:Lerp(Color3.new(1, 1, 1), 0.12) }, FAST)
+	end)
+	button.MouseLeave:Connect(function()
+		Components.tween(button, { BackgroundColor3 = base }, FAST)
+		Components.tween(scale, { Scale = 1 }, FAST)
+	end)
+	button.MouseButton1Down:Connect(function()
+		Components.tween(scale, { Scale = 0.95 }, FAST)
+	end)
+	button.MouseButton1Up:Connect(function()
+		Components.tween(scale, { Scale = 1 }, FAST)
+	end)
+	return button
+end
+
+function Components.setButtonEnabled(button: TextButton, enabled: boolean)
+	button.Active = enabled
+	button.AutoButtonColor = false
+	button.TextTransparency = if enabled then 0 else 0.45
+	button.BackgroundTransparency = if enabled then 0 else 0.5
+end
+
+-- Panel ----------------------------------------------------------------------
+-- Returns (panel, contentFrame, closeButton)
+function Components.Panel(title: string, size: UDim2): (Frame, Frame, TextButton)
+	local panel = create("Frame", {
+		Name = title .. "Panel",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = size,
+		BackgroundColor3 = Theme.Background,
+		Visible = false,
+	}, {
+		corner(UDim.new(0, 18)),
+		stroke(Theme.Stroke, 2),
+		create("UISizeConstraint", { MaxSize = Vector2.new(720, 560) }),
+		create("UIGradient", {
+			Rotation = 90,
+			Color = ColorSequence.new(Theme.Surface, Theme.Background),
+		}),
+	}) :: Frame
+
+	local header = create("Frame", {
+		Name = "Header",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 56),
+	}, { padding(14) })
+	header.Parent = panel
+
+	local titleLabel = label(title, 22, Theme.Text, true)
+	titleLabel.Size = UDim2.new(1, -48, 1, 0)
+	titleLabel.Parent = header
+
+	local close = Components.Button("X", "ghost")
+	close.Name = "Close"
+	close.AnchorPoint = Vector2.new(1, 0.5)
+	close.Position = UDim2.new(1, 0, 0.5, 0)
+	close.Size = UDim2.fromOffset(32, 32)
+	close.Parent = header
+
+	local content = create("ScrollingFrame", {
+		Name = "Content",
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Position = UDim2.fromOffset(0, 56),
+		Size = UDim2.new(1, 0, 1, -56),
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollBarThickness = 6,
+		ScrollBarImageColor3 = Theme.Stroke,
+	}, { padding(14) }) :: Frame
+	content.Parent = panel
+
+	close.Activated:Connect(function()
+		Components.hidePanel(panel)
+	end)
+	return panel, content, close
+end
+
+function Components.showPanel(panel: Frame)
+	local scale = panel:FindFirstChildOfClass("UIScale") or create("UIScale", { Parent = panel })
+	;(scale :: UIScale).Scale = 0.85
+	panel.Visible = true
+	Components.tween(scale, { Scale = 1 })
+end
+
+function Components.hidePanel(panel: Frame)
+	panel.Visible = false
+end
+
+function Components.listLayout(parent: Instance, gap: number)
+	create("UIListLayout", {
+		Padding = UDim.new(0, gap),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = parent,
+	})
+end
+
+-- Currency pill --------------------------------------------------------------
+function Components.CurrencyPill(currency: { id: string, label: string, color: string }): Frame
+	local pill = create("Frame", {
+		Name = currency.id,
+		BackgroundColor3 = Theme.Surface,
+		Size = UDim2.fromOffset(150, 40),
+	}, {
+		corner(UDim.new(1, 0)),
+		stroke(),
+		create("Frame", {
+			Name = "Icon",
+			BackgroundColor3 = Color3.fromHex(currency.color),
+			Position = UDim2.fromOffset(8, 8),
+			Size = UDim2.fromOffset(24, 24),
+		}, { corner(UDim.new(1, 0)), stroke(Color3.new(1, 1, 1), 1) }),
+	}) :: Frame
+	local amount = label("0", 18, Theme.Text, true)
+	amount.Name = "Amount"
+	amount.Position = UDim2.fromOffset(40, 9)
+	amount.Size = UDim2.new(1, -48, 0, 22)
+	amount.Parent = pill
+	return pill
+end
+
+-- Animates the number shown in a CurrencyPill and pops it when it increases.
+function Components.setCurrency(pill: Frame, value: number, format: (number) -> string)
+	local amount = pill:FindFirstChild("Amount") :: TextLabel
+	local previous = (pill:GetAttribute("Value") :: number?) or value
+	pill:SetAttribute("Value", value)
+	amount.Text = format(value)
+	if value > previous then
+		amount.TextColor3 = Theme.Success
+		Components.tween(amount, { TextColor3 = Theme.Text }, TweenInfo.new(0.6))
+	end
+end
+
+-- Progress bar ---------------------------------------------------------------
+function Components.ProgressBar(): Frame
+	local bar = create("Frame", {
+		Name = "ProgressBar",
+		BackgroundColor3 = Theme.SurfaceRaised,
+		Size = UDim2.new(1, 0, 0, 10),
+	}, { corner(UDim.new(1, 0)) }) :: Frame
+	local fill = create("Frame", {
+		Name = "Fill",
+		BackgroundColor3 = Theme.Primary,
+		Size = UDim2.fromScale(0, 1),
+	}, {
+		corner(UDim.new(1, 0)),
+		create("UIGradient", { Color = ColorSequence.new(Theme.Primary, Theme.Success) }),
+	})
+	fill.Parent = bar
+	bar:GetAttributeChangedSignal("Progress"):Connect(function()
+		local p = math.clamp((bar:GetAttribute("Progress") :: number?) or 0, 0, 1)
+		Components.tween(fill, { Size = UDim2.fromScale(p, 1) })
+	end)
+	return bar
+end
+
+-- Quest card -----------------------------------------------------------------
+-- quest = { id, title, progress, target, claimed, reward = { currency, amount } }
+function Components.QuestCard(quest: any, onClaim: (string) -> ()): Frame
+	local card = create("Frame", {
+		Name = quest.id,
+		BackgroundColor3 = Theme.Surface,
+		Size = UDim2.new(1, 0, 0, 92),
+	}, { corner(), stroke(), padding(12) }) :: Frame
+
+	local title = label(quest.title, 17, Theme.Text, true)
+	title.Size = UDim2.new(1, -130, 0, 22)
+	title.Parent = card
+
+	local sub = label(string.format("%d / %d  ·  Reward: %d %s", quest.progress, quest.target, quest.reward.amount, quest.reward.currency), 14, Theme.TextMuted)
+	sub.Position = UDim2.fromOffset(0, 26)
+	sub.Size = UDim2.new(1, -130, 0, 18)
+	sub.Parent = card
+
+	local bar = Components.ProgressBar()
+	bar.Position = UDim2.new(0, 0, 1, -10)
+	bar.Size = UDim2.new(1, -130, 0, 10)
+	bar.Parent = card
+	bar:SetAttribute("Progress", quest.progress / quest.target)
+
+	local done = quest.progress >= quest.target
+	local button = Components.Button(if quest.claimed then "Claimed" elseif done then "Claim" else "In progress", if done and not quest.claimed then "success" else "ghost")
+	button.AnchorPoint = Vector2.new(1, 0.5)
+	button.Position = UDim2.fromScale(1, 0.5)
+	button.Parent = card
+	Components.setButtonEnabled(button, done and not quest.claimed)
+	button.Activated:Connect(function()
+		if button.Active then
+			onClaim(quest.id)
+		end
+	end)
+	return card
+end
+
+-- Shop card ------------------------------------------------------------------
+function Components.ShopCard(name: string, subtitle: string, priceText: string, onBuy: () -> (), disabledText: string?): Frame
+	local card = create("Frame", {
+		Name = name,
+		BackgroundColor3 = Theme.Surface,
+	}, { corner(), stroke(), padding(12) }) :: Frame
+
+	local title = label(name, 17, Theme.Text, true)
+	title.Parent = card
+	local sub = label(subtitle, 14, Theme.TextMuted)
+	sub.TextWrapped = true
+	sub.TextTruncate = Enum.TextTruncate.None
+	sub.Position = UDim2.fromOffset(0, 24)
+	sub.Size = UDim2.new(1, 0, 0, 36)
+	sub.Parent = card
+
+	local button = Components.Button(disabledText or priceText, if disabledText then "ghost" else "primary")
+	button.AnchorPoint = Vector2.new(0, 1)
+	button.Position = UDim2.fromScale(0, 1)
+	button.Size = UDim2.new(1, 0, 0, 34)
+	button.Parent = card
+	Components.setButtonEnabled(button, disabledText == nil)
+	button.Activated:Connect(function()
+		if button.Active then
+			onBuy()
+		end
+	end)
+	return card
+end
+
+-- Inventory slot -------------------------------------------------------------
+function Components.InventorySlot(slot: any?, equipped: boolean, onClick: (() -> ())?): TextButton
+	local rarityColor = if slot then (Theme.Rarity[slot.rarity] or Theme.Rarity.Common) else Theme.Stroke
+	local cell = create("TextButton", {
+		AutoButtonColor = false,
+		BackgroundColor3 = if equipped then Theme.SurfaceRaised else Theme.Surface,
+		Text = "",
+	}, { corner(UDim.new(0, 10)), stroke(rarityColor, if equipped then 3 else 1.5) }) :: TextButton
+	if slot then
+		local name = label(slot.name, 13, Theme.Text, true)
+		name.TextXAlignment = Enum.TextXAlignment.Center
+		name.TextWrapped = true
+		name.TextTruncate = Enum.TextTruncate.None
+		name.Size = UDim2.new(1, -8, 0.6, 0)
+		name.Position = UDim2.new(0, 4, 0.1, 0)
+		name.Parent = cell
+		if slot.count > 1 then
+			local count = label("x" .. slot.count, 12, Theme.TextMuted, true)
+			count.TextXAlignment = Enum.TextXAlignment.Right
+			count.AnchorPoint = Vector2.new(1, 1)
+			count.Position = UDim2.new(1, -6, 1, -4)
+			count.Size = UDim2.fromOffset(40, 14)
+			count.Parent = cell
+		end
+		if onClick then
+			cell.Activated:Connect(onClick)
+		end
+	end
+	return cell
+end
+
+-- Toast ----------------------------------------------------------------------
+function Components.Toast(parent: Instance, text: string, kind: string?)
+	local color = if kind == "success" then Theme.Success elseif kind == "error" then Theme.Danger else Theme.Primary
+	local toast = create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, -60),
+		Size = UDim2.fromOffset(320, 44),
+		BackgroundColor3 = Theme.Surface,
+		ZIndex = 50,
+	}, { corner(UDim.new(0, 10)), stroke(color, 2) })
+	local msg = label(text, 16, Theme.Text, true)
+	msg.TextXAlignment = Enum.TextXAlignment.Center
+	msg.Size = UDim2.fromScale(1, 1)
+	msg.ZIndex = 51
+	msg.Parent = toast
+	toast.Parent = parent
+	Components.tween(toast, { Position = UDim2.new(0.5, 0, 0, 16) })
+	task.delay(2.5, function()
+		local out = Components.tween(toast, { Position = UDim2.new(0.5, 0, 0, -60) })
+		out.Completed:Wait()
+		toast:Destroy()
+	end)
+end
+
+return Components
+]]></string>
+          </Properties>
+        </Item>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="ServerScriptService" referent="12">
+    <Properties>
+      <string name="Name">ServerScriptService</string>
+    </Properties>
+    <Item class="Folder" referent="13">
+      <Properties>
+        <string name="Name">StarterKitExamples</string>
+      </Properties>
+      <Item class="Script" referent="14">
+        <Properties>
+          <string name="Name">CoinPickup</string>
+          <token name="RunContext">0</token>
+          <string name="Source"><![CDATA[--[[
+	Example: coins that give currency and quest progress.
+	Any BasePart tagged "StarterKitCoin" (Tag Editor / CollectionService) becomes
+	a coin. For the demo place, this script also spawns a ring of 12 coins.
+	Delete the "spawn demo coins" block in your own game.
+]]
+local CollectionService = game:GetService("CollectionService")
+local Players = game:GetService("Players")
+local ServerScriptService = game:GetService("ServerScriptService")
+
+local Kit = require(ServerScriptService:WaitForChild("StarterKitServer"):WaitForChild("StarterKitService"))
+
+local COIN_TAG = "StarterKitCoin"
+local COIN_VALUE = 5
+local RESPAWN_SECONDS = 8
+
+-- spawn demo coins -------------------------------------------------------
+for i = 1, 12 do
+	local angle = i / 12 * math.pi * 2
+	local coin = Instance.new("Part")
+	coin.Name = "Coin"
+	coin.Shape = Enum.PartType.Cylinder
+	coin.Size = Vector3.new(0.4, 2.5, 2.5)
+	coin.Color = Color3.fromHex("#F5C542")
+	coin.Material = Enum.Material.Neon
+	coin.Anchored = true
+	coin.CanCollide = false
+	coin.CFrame = CFrame.new(math.cos(angle) * 20, 3, math.sin(angle) * 20) * CFrame.Angles(0, 0, math.rad(90))
+	coin.Parent = workspace
+	CollectionService:AddTag(coin, COIN_TAG)
+end
+-- end demo coins -----------------------------------------------------------
+
+local function setupCoin(coin: Instance)
+	if not coin:IsA("BasePart") then
+		return
+	end
+	local available = true
+	coin.Touched:Connect(function(hit)
+		if not available then
+			return
+		end
+		local character = hit:FindFirstAncestorOfClass("Model")
+		local player = character and Players:GetPlayerFromCharacter(character)
+		if not player then
+			return
+		end
+		available = false
+		coin.Transparency = 1
+		Kit.addCurrency(player, "Coins", COIN_VALUE)
+		Kit.recordQuestEvent(player, "CoinsCollected", COIN_VALUE)
+		task.delay(RESPAWN_SECONDS, function()
+			coin.Transparency = 0
+			available = true
+		end)
+	end)
+end
+
+for _, coin in CollectionService:GetTagged(COIN_TAG) do
+	setupCoin(coin)
+end
+CollectionService:GetInstanceAddedSignal(COIN_TAG):Connect(setupCoin)
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="Script" referent="15">
+        <Properties>
+          <string name="Name">PlaytimeAndJumps</string>
+          <token name="RunContext">0</token>
+          <string name="Source"><![CDATA[--[[
+	Example: feed "MinutesPlayed" and "Jumped" quest events.
+	Shows how any game system reports progress with one line:
+		Kit.recordQuestEvent(player, "<EventName>", amount)
+	Event names must match the `event` field of quests in KitConfig.
+]]
+local Players = game:GetService("Players")
+local ServerScriptService = game:GetService("ServerScriptService")
+
+local Kit = require(ServerScriptService:WaitForChild("StarterKitServer"):WaitForChild("StarterKitService"))
+
+local function onCharacter(player: Player, character: Model)
+	local humanoid = character:WaitForChild("Humanoid") :: Humanoid
+	humanoid.StateChanged:Connect(function(_, newState)
+		if newState == Enum.HumanoidStateType.Jumping then
+			Kit.recordQuestEvent(player, "Jumped", 1)
+		end
+	end)
+end
+
+local function onPlayer(player: Player)
+	player.CharacterAdded:Connect(function(character)
+		onCharacter(player, character)
+	end)
+	if player.Character then
+		onCharacter(player, player.Character)
+	end
+	-- One "MinutesPlayed" tick per minute while the player is in the server.
+	task.spawn(function()
+		while player.Parent do
+			task.wait(60)
+			if player.Parent then
+				Kit.recordQuestEvent(player, "MinutesPlayed", 1)
+			end
+		end
+	end)
+end
+
+Players.PlayerAdded:Connect(onPlayer)
+for _, player in Players:GetPlayers() do
+	task.spawn(onPlayer, player)
+end
+]]></string>
+        </Properties>
+      </Item>
+    </Item>
+    <Item class="Folder" referent="16">
+      <Properties>
+        <string name="Name">StarterKitServer</string>
+      </Properties>
+      <Item class="Script" referent="17">
+        <Properties>
+          <string name="Name">Main</string>
+          <token name="RunContext">0</token>
+          <string name="Source"><![CDATA[-- Starts the Starter Kit server. Keep this tiny; logic lives in StarterKitService.
+require(script.Parent:WaitForChild("StarterKitService")).start()
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="18">
+        <Properties>
+          <string name="Name">StarterKitService</string>
+          <string name="Source"><![CDATA[--[[
+	StarterKitService (ModuleScript, ServerScriptService.StarterKitServer)
+
+	Roblox-specific glue around the pure modules in ReplicatedStorage.StarterKit.Shared:
+	  * loads/saves player data with DataStoreService (UpdateAsync + retries)
+	  * creates the RemoteFunctions/RemoteEvents the client UI uses
+	  * validates every client request on the server (client is never trusted)
+	  * handles developer-product receipts idempotently and gamepass ownership
+
+	Public API for your own game scripts:
+		local Kit = require(game.ServerScriptService.StarterKitServer.StarterKitService)
+		Kit.recordQuestEvent(player, "CoinsCollected", 5)
+		Kit.addCurrency(player, "Coins", 10)
+		Kit.giveItem(player, "apple", 3)
+		Kit.ownsGamepass(player, "vip")
+
+	NOTE: This file uses Roblox APIs and was NOT executed in Roblox Studio by
+	the author of this kit build. Follow docs/STUDIO_TEST_CHECKLIST.md before
+	shipping it in a live game. For large games consider a session-locking
+	library (e.g. ProfileStore) instead of the simple saving below.
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local DataStoreService = game:GetService("DataStoreService")
+local MarketplaceService = game:GetService("MarketplaceService")
+
+local Kit = ReplicatedStorage:WaitForChild("StarterKit")
+local Shared = Kit:WaitForChild("Shared")
+
+local KitConfig = require(Shared:WaitForChild("KitConfig"))
+local Wallet = require(Shared:WaitForChild("Wallet"))
+local DailyQuests = require(Shared:WaitForChild("DailyQuests"))
+local DailySpin = require(Shared:WaitForChild("DailySpin"))
+local Inventory = require(Shared:WaitForChild("Inventory"))
+local Shop = require(Shared:WaitForChild("Shop"))
+local PlayerData = require(Shared:WaitForChild("PlayerData"))
+
+local Service = {}
+
+local DATASTORE_NAME = "StarterKit_PlayerData_v1"
+local SAVE_RETRIES = 3
+local AUTOSAVE_SECONDS = 120
+local REQUEST_COOLDOWN = 0.25 -- seconds between remote calls per player
+
+local profiles: { [Player]: any } = {}
+local gamepassCache: { [Player]: { [string]: boolean } } = {}
+local lastRequest: { [Player]: number } = {}
+local remotes: { [string]: any } = {}
+local random = Random.new()
+
+local store = nil
+do
+	local ok, result = pcall(function()
+		return DataStoreService:GetDataStore(DATASTORE_NAME)
+	end)
+	if ok then
+		store = result
+	else
+		warn("[StarterKit] DataStore unavailable, data will NOT be saved:", result)
+	end
+end
+
+local function key(player: Player): string
+	return "player_" .. player.UserId
+end
+
+local function withRetries(fn: () -> any): (boolean, any)
+	local ok, result
+	for attempt = 1, SAVE_RETRIES do
+		ok, result = pcall(fn)
+		if ok then
+			return true, result
+		end
+		task.wait(attempt)
+	end
+	return false, result
+end
+
+local function loadProfile(player: Player): any
+	local template = PlayerData.default(KitConfig)
+	local data = nil
+	if store then
+		local ok, result = withRetries(function()
+			return store:GetAsync(key(player))
+		end)
+		if not ok then
+			warn("[StarterKit] Load failed for", player.Name, result)
+			player:Kick("Could not load your data. Please rejoin.")
+			return nil
+		end
+		data = result
+	end
+	if type(data) ~= "table" then
+		data = PlayerData.deepCopy(template)
+	end
+	return PlayerData.reconcile(data, template)
+end
+
+function Service.save(player: Player): boolean
+	local data = profiles[player]
+	if not data or not store then
+		return store == nil -- nothing to save to counts as "ok" in Studio without API access
+	end
+	local ok, err = withRetries(function()
+		return store:UpdateAsync(key(player), function()
+			return data
+		end)
+	end)
+	if not ok then
+		warn("[StarterKit] Save failed for", player.Name, err)
+	end
+	return ok
+end
+
+local function refreshGamepasses(player: Player)
+	local owned = {}
+	for passKey, pass in KitConfig.shop.gamepasses do
+		if pass.id ~= 0 then
+			local ok, result = pcall(function()
+				return MarketplaceService:UserOwnsGamePassAsync(player.UserId, pass.id)
+			end)
+			owned[passKey] = ok and result == true
+		else
+			owned[passKey] = false
+		end
+	end
+	gamepassCache[player] = owned
+end
+
+function Service.ownsGamepass(player: Player, passKey: string): boolean
+	local cache = gamepassCache[player]
+	return cache ~= nil and cache[passKey] == true
+end
+
+local function now(): number
+	return os.time()
+end
+
+-- Snapshot sent to the client. Only display data, never anything secret.
+local function snapshot(player: Player): any
+	local data = profiles[player]
+	if not data then
+		return nil
+	end
+	local t = now()
+	data.quests = DailyQuests.refresh(data.quests, KitConfig.quests, t)
+
+	local quests = {}
+	for _, progress in data.quests.quests do
+		for _, def in KitConfig.quests.pool do
+			if def.id == progress.id then
+				table.insert(quests, {
+					id = def.id,
+					title = def.title,
+					progress = progress.progress,
+					target = def.target,
+					claimed = progress.claimed,
+					reward = def.reward,
+				})
+			end
+		end
+	end
+
+	local odds = DailySpin.odds(KitConfig.spin)
+	local segments = {}
+	for i, segment in KitConfig.spin.segments do
+		table.insert(segments, { id = segment.id, label = segment.label, color = segment.color, chance = odds[i] })
+	end
+
+	local slots = {}
+	for _, slot in data.inventory.slots do
+		local def = KitConfig.items[slot.itemId]
+		table.insert(slots, {
+			itemId = slot.itemId,
+			count = slot.count,
+			name = def and def.name or slot.itemId,
+			rarity = def and def.rarity or "Common",
+		})
+	end
+
+	local passes = {}
+	for passKey, pass in KitConfig.shop.gamepasses do
+		table.insert(passes, {
+			key = passKey,
+			id = pass.id,
+			name = pass.name,
+			description = pass.description,
+			priceLabel = pass.priceLabel,
+			owned = Service.ownsGamepass(player, passKey),
+		})
+	end
+	local products = {}
+	for productKey, product in KitConfig.shop.products do
+		table.insert(products, { key = productKey, id = product.id, name = product.name, priceLabel = product.priceLabel })
+	end
+	local offers = {}
+	for offerKey, offer in KitConfig.shop.offers do
+		table.insert(offers, { key = offerKey, name = offer.name or offerKey, price = offer.price })
+	end
+
+	return {
+		currencies = KitConfig.currencies,
+		wallet = data.wallet,
+		quests = quests,
+		questResetIn = DailyQuests.secondsUntilReset(t),
+		spin = { secondsLeft = DailySpin.secondsUntilNextSpin(data.spin, KitConfig.spin, t), segments = segments },
+		inventory = { capacity = data.inventory.capacity, equipped = data.inventory.equipped, slots = slots },
+		shop = { gamepasses = passes, products = products, offers = offers },
+	}
+end
+
+local function pushState(player: Player)
+	local state = snapshot(player)
+	if state then
+		remotes.StateChanged:FireClient(player, state)
+	end
+end
+
+local function notify(player: Player, text: string, kind: string?)
+	remotes.Notify:FireClient(player, text, kind or "info")
+end
+
+local function throttled(player: Player): boolean
+	local t = os.clock()
+	if lastRequest[player] and t - lastRequest[player] < REQUEST_COOLDOWN then
+		return true
+	end
+	lastRequest[player] = t
+	return false
+end
+
+-- Public helpers -------------------------------------------------------------
+
+function Service.addCurrency(player: Player, currency: string, amount: number): boolean
+	local data = profiles[player]
+	if not data then
+		return false
+	end
+	local ok = Wallet.add(data.wallet, currency, amount)
+	if ok then
+		pushState(player)
+	end
+	return ok
+end
+
+function Service.giveItem(player: Player, itemId: string, amount: number): (boolean, string?)
+	local data = profiles[player]
+	if not data then
+		return false, "not loaded"
+	end
+	local ok, err = Inventory.add(data.inventory, KitConfig.items, itemId, amount)
+	if ok then
+		pushState(player)
+	end
+	return ok, err
+end
+
+function Service.recordQuestEvent(player: Player, event: string, amount: number)
+	local data = profiles[player]
+	if not data then
+		return
+	end
+	local t = now()
+	data.quests = DailyQuests.refresh(data.quests, KitConfig.quests, t)
+	local completed = DailyQuests.recordEvent(data.quests, KitConfig.quests, event, amount, t)
+	if #completed > 0 then
+		notify(player, "Quest complete! Claim your reward.", "success")
+	end
+	pushState(player)
+end
+
+-- Remote handlers ------------------------------------------------------------
+
+local handlers: { [string]: (Player, ...any) -> (any, any) } = {}
+
+function handlers.GetState(player: Player)
+	return snapshot(player)
+end
+
+function handlers.ClaimQuest(player: Player, questId: any)
+	local data = profiles[player]
+	if not data or type(questId) ~= "string" then
+		return false, "bad request"
+	end
+	local t = now()
+	data.quests = DailyQuests.refresh(data.quests, KitConfig.quests, t)
+	local reward, err = DailyQuests.claim(data.quests, KitConfig.quests, questId, t)
+	if not reward then
+		return false, err
+	end
+	local amount = reward.amount
+	if Service.ownsGamepass(player, "vip") then
+		amount *= KitConfig.vipQuestMultiplier
+	end
+	Wallet.add(data.wallet, reward.currency, amount)
+	pushState(player)
+	return true, string.format("+%s %s", Wallet.format(amount), reward.currency)
+end
+
+function handlers.Spin(player: Player)
+	local data = profiles[player]
+	if not data then
+		return false, "bad request"
+	end
+	local index, reward, err = DailySpin.spin(data.spin, KitConfig.spin, now(), function()
+		return random:NextNumber()
+	end)
+	if not index or not reward then
+		return false, err
+	end
+	Wallet.add(data.wallet, reward.currency, reward.amount)
+	Service.recordQuestEvent(player, "WheelSpun", 1)
+	return true, index
+end
+
+function handlers.BuyOffer(player: Player, offerKey: any)
+	local data = profiles[player]
+	if not data or type(offerKey) ~= "string" then
+		return false, "bad request"
+	end
+	local ok, err = Shop.buyOffer(KitConfig.shop, offerKey, {
+		canAfford = function(c, a)
+			return Wallet.canAfford(data.wallet, c, a)
+		end,
+		spend = function(c, a)
+			return Wallet.spend(data.wallet, c, a)
+		end,
+		refund = function(c, a)
+			Wallet.add(data.wallet, c, a)
+		end,
+		giveItem = function(id, a)
+			return Inventory.add(data.inventory, KitConfig.items, id, a)
+		end,
+	})
+	if ok then
+		Service.recordQuestEvent(player, "ItemBought", 1)
+	end
+	return ok, err
+end
+
+function handlers.Equip(player: Player, itemId: any)
+	local data = profiles[player]
+	if not data or (itemId ~= nil and type(itemId) ~= "string") then
+		return false, "bad request"
+	end
+	local ok, err = Inventory.equip(data.inventory, itemId)
+	pushState(player)
+	return ok, err
+end
+
+function handlers.SortInventory(player: Player)
+	local data = profiles[player]
+	if not data then
+		return false, "bad request"
+	end
+	Inventory.sort(data.inventory, KitConfig.items)
+	pushState(player)
+	return true, nil
+end
+
+-- Setup ----------------------------------------------------------------------
+
+local function createRemotes()
+	local folder = Kit:FindFirstChild("Remotes") or Instance.new("Folder")
+	folder.Name = "Remotes"
+	for name in handlers do
+		local rf = Instance.new("RemoteFunction")
+		rf.Name = name
+		rf.Parent = folder
+		rf.OnServerInvoke = function(player, ...)
+			if throttled(player) and name ~= "GetState" then
+				return false, "slow down"
+			end
+			return handlers[name](player, ...)
+		end
+		remotes[name] = rf
+	end
+	for _, name in { "StateChanged", "Notify" } do
+		local re = Instance.new("RemoteEvent")
+		re.Name = name
+		re.Parent = folder
+		remotes[name] = re
+	end
+	folder.Parent = Kit
+end
+
+local function onPlayerAdded(player: Player)
+	local data = loadProfile(player)
+	if not data or not player.Parent then
+		return
+	end
+	profiles[player] = data
+	refreshGamepasses(player)
+	player:SetAttribute("StarterKitLoaded", true)
+	pushState(player)
+end
+
+local function onPlayerRemoving(player: Player)
+	Service.save(player)
+	profiles[player] = nil
+	gamepassCache[player] = nil
+	lastRequest[player] = nil
+end
+
+local function processReceipt(receiptInfo)
+	local player = Players:GetPlayerByUserId(receiptInfo.PlayerId)
+	local data = player and profiles[player]
+	if not data then
+		return Enum.ProductPurchaseDecision.NotProcessedYet
+	end
+	local result = Shop.processReceipt(KitConfig.shop, data.receipts, receiptInfo, function(product)
+		return (Wallet.add(data.wallet, product.grant.currency, product.grant.amount))
+	end)
+	if result == "Granted" or result == "AlreadyGranted" then
+		-- Only confirm the purchase once the grant is safely saved.
+		if Service.save(player) then
+			pushState(player)
+			return Enum.ProductPurchaseDecision.PurchaseGranted
+		end
+	end
+	return Enum.ProductPurchaseDecision.NotProcessedYet
+end
+
+local started = false
+
+function Service.start()
+	if started then
+		return
+	end
+	started = true
+
+	local ok, errors, warnings = Shop.validateCatalog(KitConfig.shop)
+	for _, w in warnings do
+		warn("[StarterKit] " .. w)
+	end
+	assert(ok, "[StarterKit] invalid shop config: " .. table.concat(errors, "; "))
+	assert(DailyQuests.validateConfig(KitConfig.quests))
+	assert(DailySpin.validateConfig(KitConfig.spin))
+
+	createRemotes()
+	MarketplaceService.ProcessReceipt = processReceipt
+	MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(player, passId, purchased)
+		if purchased then
+			refreshGamepasses(player)
+			pushState(player)
+		end
+	end)
+
+	Players.PlayerAdded:Connect(onPlayerAdded)
+	Players.PlayerRemoving:Connect(onPlayerRemoving)
+	for _, player in Players:GetPlayers() do
+		task.spawn(onPlayerAdded, player)
+	end
+
+	game:BindToClose(function()
+		for _, player in Players:GetPlayers() do
+			Service.save(player)
+		end
+	end)
+
+	task.spawn(function()
+		while true do
+			task.wait(AUTOSAVE_SECONDS)
+			for _, player in Players:GetPlayers() do
+				task.spawn(Service.save, player)
+			end
+		end
+	end)
+end
+
+return Service
+]]></string>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="StarterPlayer" referent="19">
+    <Properties>
+      <string name="Name">StarterPlayer</string>
+    </Properties>
+    <Item class="StarterPlayerScripts" referent="20">
+      <Properties>
+        <string name="Name">StarterPlayerScripts</string>
+      </Properties>
+      <Item class="LocalScript" referent="21">
+        <Properties>
+          <string name="Name">StarterKitClient</string>
+          <string name="Source"><![CDATA[--[[
+	StarterKitClient (LocalScript, StarterPlayer.StarterPlayerScripts)
+
+	Builds the whole kit UI from code: currency bar, side menu, and the
+	Quests / Daily Spin / Shop / Backpack panels. The client only DISPLAYS state
+	and ASKS the server to do things; the server validates everything.
+
+	NOTE: Uses Roblox APIs; not executed in Roblox Studio by the kit author.
+	See docs/STUDIO_TEST_CHECKLIST.md.
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local MarketplaceService = game:GetService("MarketplaceService")
+
+local player = Players.LocalPlayer
+local Kit = ReplicatedStorage:WaitForChild("StarterKit")
+local Remotes = Kit:WaitForChild("Remotes")
+local C = require(Kit:WaitForChild("UI"):WaitForChild("Components"))
+local Wallet = require(Kit:WaitForChild("Shared"):WaitForChild("Wallet"))
+local Theme = C.Theme
+
+local state: any = nil
+
+local gui = C.create("ScreenGui", {
+	Name = "StarterKitUI",
+	ResetOnSpawn = false,
+	IgnoreGuiInset = true,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+})
+
+local function call(name: string, ...): (boolean, any)
+	local ok, success, result = pcall(function(...)
+		return Remotes:WaitForChild(name):InvokeServer(...)
+	end, ...)
+	if not ok then
+		return false, "connection error"
+	end
+	return success, result
+end
+
+local function formatTime(seconds: number): string
+	seconds = math.max(0, math.floor(seconds))
+	return string.format("%02d:%02d:%02d", seconds // 3600, (seconds % 3600) // 60, seconds % 60)
+end
+
+-- Currency bar ---------------------------------------------------------------
+local currencyBar = C.create("Frame", {
+	Name = "CurrencyBar",
+	BackgroundTransparency = 1,
+	AnchorPoint = Vector2.new(0.5, 0),
+	Position = UDim2.new(0.5, 0, 0, 12),
+	Size = UDim2.fromOffset(320, 40),
+	Parent = gui,
+})
+C.create("UIListLayout", {
+	FillDirection = Enum.FillDirection.Horizontal,
+	HorizontalAlignment = Enum.HorizontalAlignment.Center,
+	Padding = UDim.new(0, 10),
+	Parent = currencyBar,
+})
+local pills = {}
+
+-- Panels ---------------------------------------------------------------------
+local panelSize = UDim2.fromScale(0.62, 0.7)
+local questsPanel, questsContent = C.Panel("Daily Quests", panelSize)
+local spinPanel, spinContent = C.Panel("Daily Spin", panelSize)
+local shopPanel, shopContent = C.Panel("Shop", panelSize)
+local backpackPanel, backpackContent = C.Panel("Backpack", panelSize)
+local panels = { questsPanel, spinPanel, shopPanel, backpackPanel }
+for _, panel in panels do
+	panel.Parent = gui
+end
+
+local function openOnly(target: Frame)
+	for _, panel in panels do
+		if panel ~= target then
+			C.hidePanel(panel)
+		end
+	end
+	if target.Visible then
+		C.hidePanel(target)
+	else
+		C.showPanel(target)
+	end
+end
+
+-- Side menu ------------------------------------------------------------------
+local menu = C.create("Frame", {
+	Name = "Menu",
+	BackgroundTransparency = 1,
+	AnchorPoint = Vector2.new(0, 0.5),
+	Position = UDim2.new(0, 12, 0.5, 0),
+	Size = UDim2.fromOffset(120, 4 * 46),
+	Parent = gui,
+})
+C.listLayout(menu, 8)
+local menuEntries: { { any } } = { { "Quests", questsPanel }, { "Spin", spinPanel }, { "Shop", shopPanel }, { "Backpack", backpackPanel } }
+for i, entry in menuEntries do
+	local button = C.Button(entry[1], "ghost")
+	button.LayoutOrder = i
+	button.Size = UDim2.new(1, 0, 0, 38)
+	button.Parent = menu
+	button.Activated:Connect(function()
+		openOnly(entry[2])
+	end)
+end
+
+-- Destroys rendered cards but keeps layouts/padding and any `keep` instance.
+local function clear(container: Instance, keep: Instance?)
+	for _, child in container:GetChildren() do
+		if child:IsA("GuiObject") and child ~= keep then
+			child:Destroy()
+		end
+	end
+end
+
+local function toast(text: string, kind: string?)
+	C.Toast(gui, text, kind)
+end
+
+-- Quests ---------------------------------------------------------------------
+C.listLayout(questsContent, 10)
+local questTimer = C.label("", 14, Theme.TextMuted)
+questTimer.LayoutOrder = 0
+
+local function renderQuests()
+	questTimer.Parent = questsContent
+	clear(questsContent, questTimer)
+	for i, quest in state.quests do
+		local card = C.QuestCard(quest, function(id)
+			local ok, result = call("ClaimQuest", id)
+			toast(if ok then result else tostring(result), if ok then "success" else "error")
+		end)
+		card.LayoutOrder = i
+		card.Parent = questsContent
+	end
+end
+
+-- Daily spin (ring of reward tiles with an animated selector) ----------------
+local spinTiles = {}
+local spinButton = C.Button("Spin!", "success")
+spinButton.Size = UDim2.fromOffset(160, 44)
+spinButton.AnchorPoint = Vector2.new(0.5, 0.5)
+spinButton.Position = UDim2.fromScale(0.5, 0.5)
+local spinning = false
+
+local function renderSpin()
+	clear(spinContent)
+	spinTiles = {}
+	local ring = C.create("Frame", {
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 300),
+		Parent = spinContent,
+	})
+	local count = #state.spin.segments
+	for i, segment in state.spin.segments do
+		local angle = (i - 1) / count * math.pi * 2 - math.pi / 2
+		local tile = C.create("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.5, math.cos(angle) * 120, 0.5, math.sin(angle) * 120),
+			Size = UDim2.fromOffset(96, 56),
+			BackgroundColor3 = Color3.fromHex(segment.color or "#5B8CFF"),
+			Parent = ring,
+		})
+		C.create("UICorner", { CornerRadius = UDim.new(0, 10), Parent = tile })
+		C.create("UIStroke", { Name = "Highlight", Color = Color3.new(1, 1, 1), Thickness = 0, Parent = tile })
+		local text = C.label(segment.label, 14, Theme.Text, true)
+		text.TextXAlignment = Enum.TextXAlignment.Center
+		text.Size = UDim2.new(1, 0, 0, 18)
+		text.Position = UDim2.fromOffset(0, 10)
+		text.Parent = tile
+		local chance = C.label(string.format("%.1f%%", segment.chance * 100), 12, Theme.Text)
+		chance.TextXAlignment = Enum.TextXAlignment.Center
+		chance.TextTransparency = 0.25
+		chance.Size = UDim2.new(1, 0, 0, 14)
+		chance.Position = UDim2.fromOffset(0, 32)
+		chance.Parent = tile
+		spinTiles[i] = tile
+	end
+	spinButton.Parent = ring
+	local ready = state.spin.secondsLeft <= 0
+	spinButton.Text = if ready then "Spin!" else formatTime(state.spin.secondsLeft)
+	C.setButtonEnabled(spinButton, ready and not spinning)
+	local note = C.label("Free once per day. Odds are shown on each tile.", 14, Theme.TextMuted)
+	note.TextXAlignment = Enum.TextXAlignment.Center
+	note.Parent = spinContent
+end
+C.listLayout(spinContent, 10)
+
+local function highlight(index: number)
+	for i, tile in spinTiles do
+		(tile:FindFirstChild("Highlight") :: UIStroke).Thickness = if i == index then 4 else 0
+	end
+end
+
+spinButton.Activated:Connect(function()
+	if spinning or not spinButton.Active then
+		return
+	end
+	spinning = true
+	C.setButtonEnabled(spinButton, false)
+	local ok, result = call("Spin")
+	if not ok then
+		spinning = false
+		toast(tostring(result), "error")
+		renderSpin()
+		return
+	end
+	-- Animate: a few laps that slow down and stop on the server's result.
+	local count = #spinTiles
+	local steps = count * 3 + (result - 1)
+	for step = 0, steps do
+		highlight(step % count + 1)
+		task.wait(0.04 + (step / steps) ^ 3 * 0.35)
+	end
+	spinning = false
+	local segment = state.spin.segments[result]
+	toast("You won " .. segment.label .. "!", "success")
+	renderSpin()
+	highlight(result)
+end)
+
+-- Shop -----------------------------------------------------------------------
+C.create("UIGridLayout", {
+	CellSize = UDim2.fromOffset(200, 130),
+	CellPadding = UDim2.fromOffset(10, 10),
+	SortOrder = Enum.SortOrder.LayoutOrder,
+	Parent = shopContent,
+})
+
+local function renderShop()
+	clear(shopContent)
+	local order = 0
+	for _, pass in state.shop.gamepasses do
+		order += 1
+		local card = C.ShopCard(pass.name, pass.description, pass.priceLabel or "Buy", function()
+			if pass.id == 0 then
+				toast("Set the gamepass id in KitConfig first", "error")
+				return
+			end
+			MarketplaceService:PromptGamePassPurchase(player, pass.id)
+		end, if pass.owned then "Owned" else nil)
+		card.LayoutOrder = order
+		card.Parent = shopContent
+	end
+	for _, product in state.shop.products do
+		order += 1
+		local card = C.ShopCard(product.name, "Robux purchase", product.priceLabel or "Buy", function()
+			if product.id == 0 then
+				toast("Set the product id in KitConfig first", "error")
+				return
+			end
+			MarketplaceService:PromptProductPurchase(player, product.id)
+		end)
+		card.LayoutOrder = order
+		card.Parent = shopContent
+	end
+	for _, offer in state.shop.offers do
+		order += 1
+		local card = C.ShopCard(offer.name, "Paid with in-game currency", Wallet.format(offer.price.amount) .. " " .. offer.price.currency, function()
+			local ok, err = call("BuyOffer", offer.key)
+			toast(if ok then "Purchased " .. offer.name else tostring(err), if ok then "success" else "error")
+		end)
+		card.LayoutOrder = order
+		card.Parent = shopContent
+	end
+end
+
+-- Backpack -------------------------------------------------------------------
+local function renderBackpack()
+	clear(backpackContent)
+	local inv = state.inventory
+	local header = C.create("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 36), LayoutOrder = 0, Parent = backpackContent })
+	local info = C.label(string.format("%d / %d slots", #inv.slots, inv.capacity), 15, Theme.TextMuted)
+	info.Size = UDim2.new(1, -110, 1, 0)
+	info.Parent = header
+	local sort = C.Button("Sort", "ghost")
+	sort.Size = UDim2.fromOffset(100, 32)
+	sort.AnchorPoint = Vector2.new(1, 0)
+	sort.Position = UDim2.fromScale(1, 0)
+	sort.Parent = header
+	sort.Activated:Connect(function()
+		call("SortInventory")
+	end)
+
+	local grid = C.create("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = 1, Parent = backpackContent })
+	C.create("UIGridLayout", {
+		CellSize = UDim2.fromOffset(84, 84),
+		CellPadding = UDim2.fromOffset(8, 8),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = grid,
+	})
+	for i = 1, inv.capacity do
+		local slot = inv.slots[i]
+		local equipped = slot ~= nil and inv.equipped == slot.itemId
+		local cell = C.InventorySlot(slot, equipped, if slot then function()
+			call("Equip", if equipped then nil else slot.itemId)
+		end else nil)
+		cell.LayoutOrder = i
+		cell.Parent = grid
+	end
+end
+C.listLayout(backpackContent, 10)
+
+-- State updates --------------------------------------------------------------
+local function render()
+	if not state then
+		return
+	end
+	for _, currency in state.currencies do
+		local pill = pills[currency.id]
+		if not pill then
+			pill = C.CurrencyPill(currency)
+			pill.Parent = currencyBar
+			pills[currency.id] = pill
+		end
+		C.setCurrency(pill, state.wallet[currency.id] or 0, Wallet.format)
+	end
+	renderQuests()
+	if not spinning then
+		renderSpin()
+	end
+	renderShop()
+	renderBackpack()
+end
+
+Remotes:WaitForChild("StateChanged").OnClientEvent:Connect(function(newState)
+	state = newState
+	render()
+end)
+Remotes:WaitForChild("Notify").OnClientEvent:Connect(function(text, kind)
+	toast(text, kind)
+end)
+
+gui.Parent = player:WaitForChild("PlayerGui")
+
+-- Initial state (retry a few times while the server loads the profile).
+for _ = 1, 10 do
+	local snapshot = Remotes:WaitForChild("GetState"):InvokeServer()
+	if snapshot then
+		state = snapshot
+		render()
+		break
+	end
+	task.wait(1)
+end
+
+-- Countdown labels. Runs while this LocalScript lives (until the player leaves).
+while gui.Parent do
+	task.wait(1)
+	if state then
+		state.questResetIn = math.max(0, state.questResetIn - 1)
+		questTimer.Text = "New quests in " .. formatTime(state.questResetIn)
+		if state.spin.secondsLeft > 0 then
+			state.spin.secondsLeft -= 1
+			if not spinning then
+				spinButton.Text = if state.spin.secondsLeft > 0 then formatTime(state.spin.secondsLeft) else "Spin!"
+				C.setButtonEnabled(spinButton, state.spin.secondsLeft <= 0)
+			end
+		end
+	end
+end
+]]></string>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="Workspace" referent="22">
+    <Properties>
+      <string name="Name">Workspace</string>
+      <bool name="NeedsPivotMigration">false</bool>
+    </Properties>
+    <Item class="Part" referent="23">
+      <Properties>
+        <string name="Name">Baseplate</string>
+        <bool name="Anchored">true</bool>
+        <Color3uint8 name="Color3uint8">6512482</Color3uint8>
+        <Vector3 name="Position">
+          <X>0</X>
+          <Y>-10</Y>
+          <Z>0</Z>
+        </Vector3>
+        <Vector3 name="size">
+          <X>512</X>
+          <Y>20</Y>
+          <Z>512</Z>
+        </Vector3>
+      </Properties>
+    </Item>
+    <Item class="SpawnLocation" referent="24">
+      <Properties>
+        <string name="Name">SpawnLocation</string>
+        <bool name="Anchored">true</bool>
+        <Vector3 name="Position">
+          <X>0</X>
+          <Y>0.5</Y>
+          <Z>0</Z>
+        </Vector3>
+        <Vector3 name="size">
+          <X>12</X>
+          <Y>1</Y>
+          <Z>12</Z>
+        </Vector3>
+      </Properties>
+    </Item>
+  </Item>
+</roblox>

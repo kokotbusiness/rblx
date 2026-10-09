@@ -85,7 +85,10 @@ local function loadProfile(player: Player): any
 		local ok, result = withRetries(function()
 			return store:GetAsync(key(player))
 		end)
-		if not ok and RunService:IsStudio() and string.find(tostring(result), "StudioAccessToApisNotAllowed", 1, true) then
+		-- the pcall error reads "502: API Services rejected request with error. Error code: 7 Reason: Studio access to APIs is not allowed."
+		local studioNoAccess = string.find(tostring(result), "Studio access to APIs is not allowed", 1, true)
+			or string.find(tostring(result), "StudioAccessToApisNotAllowed", 1, true)
+		if not ok and RunService:IsStudio() and studioNoAccess then
 			-- Studio without "Enable Studio Access to API Services": play with unsaved data instead of kicking.
 			warn("[StarterKit] Studio has no API access - data will NOT be saved this session (Game Settings > Security to enable)")
 			store = nil
